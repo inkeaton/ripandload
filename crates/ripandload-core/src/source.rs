@@ -18,9 +18,32 @@ impl Source {
     /// The URL needs an `http://` or `https://` scheme and something after the
     /// host; scheme and host are case-insensitive. Anything else gives `None`.
     pub fn from_url(url: &str) -> Option<Source> {
-        // 🦀 Exercise (ticket 06): make the `from_url` tests below pass.
-        let _ = url; // delete this line when you start
-        todo!()
+        let (protocol, url) = url.split_once("://")?;
+        if !protocol.eq_ignore_ascii_case("https") && !protocol.eq_ignore_ascii_case("http") {
+            return None;
+        }
+
+        let host_end = url.find(['/', '?', '#']).unwrap_or(url.len());
+        let (host, path) = url.split_at(host_end);
+        let host = host.to_ascii_lowercase();
+
+        if !path.starts_with('/') || path.len() < 2 {
+            return None;
+        };
+
+        let is_qobuz = host == "qobuz.com" || host.ends_with(".qobuz.com");
+        let is_deezer = host == "deezer.com"
+            || host == "deezer.page.link"
+            || host == "dzr.page.link"
+            || host.ends_with(".deezer.com");
+
+        if is_qobuz {
+            Some(Source::Qobuz)
+        } else if is_deezer {
+            Some(Source::Deezer)
+        } else {
+            None
+        }
     }
 
     /// streamrip's Quality levels for this Source.
