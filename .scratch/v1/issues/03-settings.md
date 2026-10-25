@@ -1,6 +1,6 @@
 # 03 – Settings
 
-Status: ready-for-agent
+Status: done
 Blocked by: 01
 
 Part of `../spec.md`.
@@ -18,10 +18,10 @@ The Settings tab edits and persists all Settings.
 
 ## Acceptance
 
-- [ ] Edit every field, Save, restart: values persist.
-- [ ] Unsaved marker appears on edit, clears on Save; closing with unsaved changes asks first.
-- [ ] Settings file has mode `0600`.
-- [ ] Tests: round-trip save/load (with `tempfile`), defaults when file missing, `validate()`.
+- [x] Edit every field, Save, restart: values persist.
+- [x] Unsaved marker appears on edit, clears on Save; closing with unsaved changes asks first.
+- [x] Settings file has mode `0600`.
+- [x] Tests: round-trip save/load (with `tempfile`), defaults when file missing, `validate()`.
 
 ## 🦀 Exercise
 
@@ -32,3 +32,6 @@ Implement `Settings::validate(&self) -> Result<(), Vec<SettingsProblem>>` (e.g. 
 `serde` derives and `#[serde(default)]`, `Option` vs defaults, `Result` and `?`, `thiserror`, cloning state for dirty-checking.
 
 ## Comments
+
+- 2026-10-25: Settings module, form, Save/unsaved marker, close guard done. `validate()` doesn't block saving: problems are shown as warnings, and later tickets check them before a Download or Upload. On Windows `directories` puts Settings in `%APPDATA%\ripandload\config\settings.toml`. Quality labels live in `settings` for now; ticket 06 may move them to `source`. Waiting on the `validate()` exercise.
+- 2026-10-25: `validate()` exercise done by the user and reviewed (match guard for the port check). Manual checks passed. Closed.

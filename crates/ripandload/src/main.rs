@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod settings_tab;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()
@@ -23,7 +24,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "ripandload",
         options,
-        Box::new(|_cc| Ok(Box::new(app::RipAndLoadApp::default()))),
+        Box::new(|_cc| Ok(Box::new(app::RipAndLoadApp::new()))),
     )
 }
 
