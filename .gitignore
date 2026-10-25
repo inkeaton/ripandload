@@ -1,0 +1,3 @@
+/target
+# Rules from an unrelated tool, not part of this project.
+/.agents/

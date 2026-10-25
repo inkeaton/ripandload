@@ -1,0 +1,51 @@
+# ripandload
+
+A desktop frontend that downloads music with streamrip and uploads it to a friend group's Navidrome server.
+
+## Language
+
+### Getting music
+
+**Source**:
+A streaming service streamrip downloads from (Qobuz, Deezer, Tidal, SoundCloud).
+_Avoid_: Provider, platform, service
+
+**Credentials**:
+The per-Source secrets that authorise downloads (Qobuz user ID and auth token, Deezer ARL).
+_Avoid_: Access token, login, keys
+
+**Quality**:
+The maximum audio quality level requested for a Download.
+_Avoid_: Bitrate, format
+
+**Naming template**:
+The pattern that names downloaded folders and track files from their metadata.
+_Avoid_: File/folder name, path format
+
+**Download**:
+One run of streamrip over one or more pasted URLs, writing into the Staging folder.
+_Avoid_: Rip, job, fetch
+
+**Staging folder**:
+The local folder where Downloads land and from which Uploads are made.
+_Avoid_: Download folder, temp folder, inbox
+
+### Sharing music
+
+**Server**:
+The remote machine running Navidrome, with the login, music folder and SSH key used to reach it.
+_Avoid_: Remote, host, laptop, NAS
+
+**Upload**:
+One push of the whole Staging folder to a Server's music folder.
+_Avoid_: Sync, transfer, deploy
+
+### The app
+
+**Settings**:
+Everything the user configures in the app: Credentials, Quality, Naming templates, Staging folder, Server.
+_Avoid_: Config, preferences
+
+**Streamrip config**:
+The app-owned streamrip configuration file generated from Settings; distinct from the user's personal streamrip config.
+_Avoid_: rip config, config.toml
