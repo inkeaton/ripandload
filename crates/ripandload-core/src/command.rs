@@ -60,6 +60,12 @@ pub fn version_specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// `rip --config-path <config> config path`. If `config` doesn't exist,
+/// streamrip creates a default one there before printing its path.
+pub fn seed_config_spec(config: &str) -> CommandSpec {
+    CommandSpec::new(Tool::Rip, &["--config-path", config, "config", "path"])
+}
+
 /// Finds the version in `rip --version` output, e.g. `rip, version 2.2.0`.
 pub fn parse_rip_version(line: &str) -> Option<&str> {
     let (_, version) = line.trim().split_once(", version ")?;
@@ -76,6 +82,21 @@ mod tests {
         let lines: Vec<String> = specs.iter().map(ToString::to_string).collect();
         assert_eq!(lines, ["rip --version", "rsync --version"]);
         assert!(specs.iter().all(|spec| spec.env.is_empty()));
+    }
+
+    #[test]
+    fn seed_config_spec_points_rip_at_the_streamrip_config() {
+        let spec = seed_config_spec("/home/a b/streamrip.toml");
+        assert_eq!(spec.program, Tool::Rip);
+        assert_eq!(
+            spec.args,
+            [
+                "--config-path",
+                "/home/a b/streamrip.toml",
+                "config",
+                "path"
+            ]
+        );
     }
 
     #[test]

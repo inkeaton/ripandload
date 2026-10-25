@@ -279,7 +279,7 @@ impl Settings {
 }
 
 /// Opens `path` for writing, truncating it, with mode 0600 on Unix.
-fn open_private(path: &Path) -> std::io::Result<fs::File> {
+pub(crate) fn open_private(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
 

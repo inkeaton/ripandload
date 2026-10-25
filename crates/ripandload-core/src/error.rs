@@ -54,3 +54,40 @@ pub enum JobError {
         source: std::io::Error,
     },
 }
+
+/// Why the Streamrip config couldn't be rendered.
+#[derive(Debug, thiserror::Error)]
+pub enum StreamripConfigError {
+    #[error("couldn't read {path}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("{path} isn't valid TOML")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml_edit::TomlError,
+    },
+
+    #[error("couldn't write the Streamrip config to {path}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("couldn't create a default Streamrip config")]
+    Tool(#[from] ToolError),
+
+    #[error("couldn't start rip to create a default Streamrip config")]
+    SeedSpawn {
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("rip didn't create a default Streamrip config at {path}: {output}")]
+    SeedFailed { path: PathBuf, output: String },
+}

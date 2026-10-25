@@ -4,6 +4,7 @@ use std::time::Duration;
 use eframe::egui;
 use ripandload_core::command;
 use ripandload_core::settings::Settings;
+use ripandload_core::streamrip_config::{self, Seeded};
 use ripandload_core::tool_env::ToolEnv;
 
 use crate::job_run::JobRun;
@@ -105,6 +106,39 @@ impl RipAndLoadApp {
         self.job = Some(job);
     }
 
+    /// Debug button until Download renders it itself (ticket 06); hidden by ticket 09.
+    /// Runs on the UI thread: it only calls `rip` the first time, to seed the file.
+    fn render_streamrip_config(&mut self) {
+        let Some(config) = streamrip_config::default_path() else {
+            self.status = "No config folder found; the Streamrip config can't be written.".into();
+            return;
+        };
+        let personal = streamrip_config::personal_path();
+        let result = streamrip_config::render(
+            &config,
+            personal.as_deref(),
+            &self.settings,
+            &ToolEnv::from_settings(&self.settings),
+        );
+        self.status = match result {
+            Ok(seeded) => {
+                let how = match seeded {
+                    Seeded::AlreadyThere => "updated",
+                    Seeded::FromPersonal => {
+                        "created from your personal streamrip config and rendered"
+                    }
+                    Seeded::FromRip => "created from streamrip's defaults and rendered",
+                };
+                format!("Streamrip config {how}: {}", config.display())
+            }
+            Err(err) => {
+                tracing::error!(error = ?err, "couldn't render the Streamrip config");
+                error_chain(&err)
+            }
+        };
+        self.log.push(self.status.clone());
+    }
+
     /// Streams new output into the log, and keeps the UI awake while a job runs,
     /// since the job thread can't wake it up by itself.
     fn poll_job(&mut self, ctx: &egui::Context) {
@@ -157,6 +191,16 @@ impl RipAndLoadApp {
                 .clicked()
             {
                 self.check_tools();
+            }
+            if ui
+                .add_enabled(
+                    !self.job_running(),
+                    egui::Button::new("Render Streamrip config"),
+                )
+                .on_hover_text("Debug: writes the app's Streamrip config from these Settings")
+                .clicked()
+            {
+                self.render_streamrip_config();
             }
         });
 

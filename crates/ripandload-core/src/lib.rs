@@ -7,6 +7,7 @@ pub mod command;
 pub mod error;
 pub mod job;
 pub mod settings;
+pub mod streamrip_config;
 pub mod tool_env;
 pub mod wsl_path;
 

@@ -1,0 +1,49 @@
+[downloads]
+# Folder where tracks are downloaded to
+folder = "/home/someone/StreamripDownloads"
+
+# The maximum number of tracks to download at once
+max_connections = 6
+
+[qobuz]
+# 1: 320kbps MP3, 2: 16/44.1, 3: 24/<=96, 4: 24/>=96
+quality = 4
+
+# Authenticate to Qobuz using auth token? Value can be true/false only
+use_auth_token = false
+
+# Enter your userid if the above use_auth_token is set to true, else enter your email
+email_or_userid = "someone@example.com"
+
+# Enter your auth token if the above use_auth_token is set to true, else enter the md5 hash of your plaintext password
+password_or_token = "personal-password-hash"
+
+# Do not change
+app_id = "personal-app-id"
+
+[tidal]
+# 0: 256kbps AAC, 1: 320kbps AAC, 2: 16/44.1 "HiFi" FLAC, 3: 24/44.1 "MQA" FLAC
+quality = 3
+
+[deezer]
+# 0, 1, or 2
+quality = 1
+arl = "personal-arl"
+
+[database]
+downloads_enabled = true
+# Path to the downloads database
+downloads_path = "/home/someone/.config/streamrip/downloads.db"
+failed_downloads_enabled = true
+failed_downloads_path = "/home/someone/.config/streamrip/failed_downloads.db"
+
+[filepaths]
+# Available keys: "albumartist", "title", "year", "bit_depth", "sampling_rate",
+# "id", and "albumcomposer"
+folder_format = "{albumartist}/{title}"
+track_format = "{tracknumber:02}. {title}"
+truncate_to = 120
+
+[misc]
+# Metadata to identify this config file. Do not change.
+version = "2.2.0"
