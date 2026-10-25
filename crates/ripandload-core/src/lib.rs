@@ -8,6 +8,7 @@ pub mod error;
 pub mod job;
 pub mod settings;
 pub mod tool_env;
+pub mod wsl_path;
 
 /// The app's version, shared by the GUI and any future frontends.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

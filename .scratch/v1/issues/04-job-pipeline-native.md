@@ -1,6 +1,6 @@
 # 04 – Job pipeline (Native)
 
-Status: ready-for-human
+Status: done
 Blocked by: 03
 
 Part of `../spec.md`.
@@ -35,3 +35,4 @@ Threads, `move` closures, `Send`, `mpsc` channels, `BufReader::lines`, `std::pro
 ## Comments
 
 - 2026-10-25: Pipeline done; waiting on the `to_wsl_path` exercise (stub + failing tests in `crates/ripandload-core/src/wsl_path.rs`) and the manual checks. Departures from the ticket text: `CommandSpec.program` is a `Tool` enum (`Rip`, `Rsync`) and `ToolEnv` resolves it, so `version_specs()` takes no Settings; `ToolEnv::Native { rip }` carries the Settings override; `ToolEnv::Wsl` returns `ToolError::WslNotSupported` until ticket 08. A job is one process; running several commands in a row (Check tools) and the streamrip version check live in the GUI's `job_run.rs`. Review flagged that as logic in the GUI crate: ticket 06 should move it to core when Download adds a second job kind. Cancel only kills the direct child; process-group kill and `pkill` are left for ticket 08.
+- 2026-10-25: `to_wsl_path` exercise done by the user and reviewed (walks the string with `chars()` / `as_str()` instead of byte slicing). Closed at the user's request; the two manual acceptance checks (Check tools output, missing `rip`) weren't recorded in the session.
