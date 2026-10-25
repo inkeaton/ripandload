@@ -3,9 +3,8 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use ripandload_core::settings::{
-    self, DEEZER_QUALITY, FOLDER_PLACEHOLDERS, QOBUZ_QUALITY, Settings, TRACK_PLACEHOLDERS,
-};
+use ripandload_core::settings::{FOLDER_PLACEHOLDERS, Settings, TRACK_PLACEHOLDERS};
+use ripandload_core::source::Source;
 
 pub fn show(ui: &mut egui::Ui, settings: &mut Settings) {
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -44,23 +43,11 @@ fn credentials(ui: &mut egui::Ui, settings: &mut Settings) {
 
 fn quality(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.label("Qobuz");
-    level_picker(
-        ui,
-        "qobuz_quality",
-        &mut settings.quality.qobuz,
-        QOBUZ_QUALITY,
-        settings::qobuz_quality_label,
-    );
+    level_picker(ui, Source::Qobuz, &mut settings.quality.qobuz);
     ui.end_row();
 
     ui.label("Deezer");
-    level_picker(
-        ui,
-        "deezer_quality",
-        &mut settings.quality.deezer,
-        DEEZER_QUALITY,
-        settings::deezer_quality_label,
-    );
+    level_picker(ui, Source::Deezer, &mut settings.quality.deezer);
     ui.end_row();
 }
 
@@ -156,18 +143,13 @@ fn secret(ui: &mut egui::Ui, id: &str, value: &mut String) {
     });
 }
 
-fn level_picker(
-    ui: &mut egui::Ui,
-    id: &str,
-    level: &mut u8,
-    levels: std::ops::RangeInclusive<u8>,
-    label: fn(u8) -> &'static str,
-) {
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(format!("{level}: {}", label(*level)))
+fn level_picker(ui: &mut egui::Ui, source: Source, level: &mut u8) {
+    egui::ComboBox::from_id_salt((source, "quality"))
+        .selected_text(format!("{level}: {}", source.quality_label(*level)))
         .show_ui(ui, |ui| {
-            for option in levels {
-                ui.selectable_value(level, option, format!("{option}: {}", label(option)));
+            for option in source.quality_levels() {
+                let label = format!("{option}: {}", source.quality_label(option));
+                ui.selectable_value(level, option, label);
             }
         });
 }

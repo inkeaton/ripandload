@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::SettingsError;
+use crate::source::Source;
 
 /// Placeholders streamrip accepts in the folder Naming template.
 pub const FOLDER_PLACEHOLDERS: &[&str] = &[
@@ -31,30 +32,6 @@ pub const TRACK_PLACEHOLDERS: &[&str] = &[
     "explicit",
     "id",
 ];
-
-/// Qobuz Quality levels: 1 = MP3 320, 2 = 16/44.1, 3 = 24/≤96, 4 = 24/>96.
-pub const QOBUZ_QUALITY: std::ops::RangeInclusive<u8> = 1..=4;
-/// Deezer Quality levels: 0 = MP3 128, 1 = MP3 320, 2 = FLAC.
-pub const DEEZER_QUALITY: std::ops::RangeInclusive<u8> = 0..=2;
-
-pub fn qobuz_quality_label(level: u8) -> &'static str {
-    match level {
-        1 => "MP3 320 kbps",
-        2 => "CD (16-bit / 44.1 kHz)",
-        3 => "Hi-Res (24-bit / ≤96 kHz)",
-        4 => "Hi-Res (24-bit / >96 kHz)",
-        _ => "unknown",
-    }
-}
-
-pub fn deezer_quality_label(level: u8) -> &'static str {
-    match level {
-        0 => "MP3 128 kbps",
-        1 => "MP3 320 kbps",
-        2 => "FLAC",
-        _ => "unknown",
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -244,11 +221,14 @@ impl Settings {
         let mut problems = Vec::new();
 
         // Quality levels
-        if !QOBUZ_QUALITY.contains(&self.quality.qobuz) {
+        if !Source::Qobuz.quality_levels().contains(&self.quality.qobuz) {
             problems.push(SettingsProblem::QobuzQualityOutOfRange(self.quality.qobuz));
         }
 
-        if !DEEZER_QUALITY.contains(&self.quality.deezer) {
+        if !Source::Deezer
+            .quality_levels()
+            .contains(&self.quality.deezer)
+        {
             problems.push(SettingsProblem::DeezerQualityOutOfRange(
                 self.quality.deezer,
             ));

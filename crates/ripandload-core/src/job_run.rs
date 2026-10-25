@@ -1,18 +1,32 @@
-//! Runs a list of commands one after another as one job, writing into the log.
-//! The app polls it each frame; nothing here blocks.
+//! Runs Check tools or a Download: one or more commands one after another,
+//! writing into the log. The app polls it each frame; nothing here blocks.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
 
-use ripandload_core::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
-use ripandload_core::job::{Job, JobEvent, Outcome};
-use ripandload_core::tool_env::ToolEnv;
+use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
+use crate::error::error_chain;
+use crate::job::{Job, JobEvent, Outcome};
+use crate::tool_env::ToolEnv;
 
-use crate::app::error_chain;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    CheckTools,
+    Download,
+}
+
+impl Kind {
+    /// Shown in the status line.
+    fn name(self) -> &'static str {
+        match self {
+            Kind::CheckTools => "Check tools",
+            Kind::Download => "Download",
+        }
+    }
+}
 
 pub struct JobRun {
-    /// Shown in the status line, e.g. "Check tools".
-    name: &'static str,
+    kind: Kind,
     tool_env: ToolEnv,
     queue: VecDeque<CommandSpec>,
     current: Option<(CommandSpec, Job)>,
@@ -23,14 +37,24 @@ pub struct JobRun {
 }
 
 impl JobRun {
-    pub fn start(
-        name: &'static str,
+    /// `rip --version` then `rsync --version`, checking streamrip's version.
+    pub fn check_tools(tool_env: ToolEnv, log: &mut Vec<String>) -> Self {
+        Self::start(Kind::CheckTools, tool_env, command::version_specs(), log)
+    }
+
+    /// One `rip` run, from `command::download_spec`.
+    pub fn download(tool_env: ToolEnv, spec: CommandSpec, log: &mut Vec<String>) -> Self {
+        Self::start(Kind::Download, tool_env, vec![spec], log)
+    }
+
+    fn start(
+        kind: Kind,
         tool_env: ToolEnv,
         specs: Vec<CommandSpec>,
         log: &mut Vec<String>,
     ) -> Self {
         let mut run = Self {
-            name,
+            kind,
             tool_env,
             queue: specs.into(),
             current: None,
@@ -75,17 +99,20 @@ impl JobRun {
     }
 
     pub fn status(&self) -> String {
+        let name = self.kind.name();
         match (&self.current, self.cancelled, self.problems) {
-            (Some((spec, _)), _, _) => format!("{}: running {spec}…", self.name),
-            (None, true, _) => format!("{} cancelled", self.name),
-            (None, false, 0) => format!("{}: all good", self.name),
-            (None, false, 1) => format!("{}: 1 problem, see the log", self.name),
-            (None, false, n) => format!("{}: {n} problems, see the log", self.name),
+            (Some((spec, _)), _, _) => format!("{name}: running {spec}…"),
+            (None, true, _) => format!("{name} cancelled"),
+            (None, false, 0) if self.kind == Kind::Download => "Download finished".to_owned(),
+            (None, false, 0) => format!("{name}: all good"),
+            (None, false, 1) => format!("{name}: 1 problem, see the log"),
+            (None, false, n) => format!("{name}: {n} problems, see the log"),
         }
     }
 
     fn on_line(&mut self, line: String, log: &mut Vec<String>) {
-        if let Some((spec, _)) = &self.current
+        if self.kind == Kind::CheckTools
+            && let Some((spec, _)) = &self.current
             && spec.program == Tool::Rip
             && let Some(version) = command::parse_rip_version(&line)
         {
@@ -99,7 +126,9 @@ impl JobRun {
             return;
         };
         match outcome {
-            Outcome::Succeeded if spec.program == Tool::Rip => self.check_rip_version(log),
+            Outcome::Succeeded if self.kind == Kind::CheckTools && spec.program == Tool::Rip => {
+                self.check_rip_version(log)
+            }
             Outcome::Succeeded => {}
             Outcome::Failed { code: Some(code) } => {
                 self.problem(log, format!("✗ {spec} failed with exit code {code}"));

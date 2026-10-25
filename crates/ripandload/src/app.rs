@@ -3,11 +3,13 @@ use std::time::Duration;
 
 use eframe::egui;
 use ripandload_core::command;
+use ripandload_core::error::error_chain;
+use ripandload_core::job_run::JobRun;
 use ripandload_core::settings::Settings;
 use ripandload_core::streamrip_config::{self, Seeded};
 use ripandload_core::tool_env::ToolEnv;
 
-use crate::job_run::JobRun;
+use crate::download_tab::{self, DownloadForm};
 use crate::settings_tab;
 
 /// How often to check on a running job for new output.
@@ -41,6 +43,7 @@ pub struct RipAndLoadApp {
     status: String,
     /// The current or last job. Only one runs at a time.
     job: Option<JobRun>,
+    download: DownloadForm,
     /// What the Settings tab is editing.
     settings: Settings,
     /// What's on disk, to tell whether there are unsaved changes.
@@ -77,6 +80,7 @@ impl RipAndLoadApp {
             log: Vec::new(),
             status,
             job: None,
+            download: DownloadForm::default(),
             saved_settings: settings.clone(),
             settings,
             settings_path,
@@ -96,47 +100,56 @@ impl RipAndLoadApp {
     /// Runs "Check tools" with the Settings as edited, saved or not.
     fn check_tools(&mut self) {
         self.log.clear();
-        let job = JobRun::start(
-            "Check tools",
-            ToolEnv::from_settings(&self.settings),
-            command::version_specs(),
-            &mut self.log,
-        );
+        let job = JobRun::check_tools(ToolEnv::from_settings(&self.settings), &mut self.log);
         self.status = job.status();
         self.job = Some(job);
     }
 
-    /// Debug button until Download renders it itself (ticket 06); hidden by ticket 09.
-    /// Runs on the UI thread: it only calls `rip` the first time, to seed the file.
-    fn render_streamrip_config(&mut self) {
+    /// Renders the Streamrip config from the Settings as edited, then starts `rip`.
+    /// Rendering runs on the UI thread: it's quick, except the very first time,
+    /// when `rip` has to create a default config.
+    fn download(&mut self) {
+        self.log.clear();
+        let tool_env = ToolEnv::from_settings(&self.settings);
         let Some(config) = streamrip_config::default_path() else {
             self.status = "No config folder found; the Streamrip config can't be written.".into();
             return;
         };
         let personal = streamrip_config::personal_path();
-        let result = streamrip_config::render(
-            &config,
-            personal.as_deref(),
-            &self.settings,
-            &ToolEnv::from_settings(&self.settings),
+        let seeded_from =
+            match streamrip_config::render(&config, personal.as_deref(), &self.settings, &tool_env)
+            {
+                Ok(Seeded::AlreadyThere) => None,
+                Ok(Seeded::FromPersonal) => Some("your personal streamrip config"),
+                Ok(Seeded::FromRip) => Some("streamrip's defaults"),
+                Err(err) => {
+                    tracing::error!(error = ?err, "couldn't render the Streamrip config");
+                    self.status = error_chain(&err);
+                    self.log.push(format!("✗ {}", self.status));
+                    return;
+                }
+            };
+        if let Some(from) = seeded_from {
+            self.log.push(format!(
+                "Created the Streamrip config at {} from {from}",
+                config.display()
+            ));
+        }
+
+        let spec = command::download_spec(
+            &config.to_string_lossy(),
+            &self.download.urls(),
+            self.download.quality,
         );
-        self.status = match result {
-            Ok(seeded) => {
-                let how = match seeded {
-                    Seeded::AlreadyThere => "updated",
-                    Seeded::FromPersonal => {
-                        "created from your personal streamrip config and rendered"
-                    }
-                    Seeded::FromRip => "created from streamrip's defaults and rendered",
-                };
-                format!("Streamrip config {how}: {}", config.display())
-            }
-            Err(err) => {
-                tracing::error!(error = ?err, "couldn't render the Streamrip config");
-                error_chain(&err)
-            }
-        };
-        self.log.push(self.status.clone());
+        let job = JobRun::download(tool_env, spec, &mut self.log);
+        self.status = job.status();
+        self.job = Some(job);
+    }
+
+    fn cancel_job(&mut self) {
+        if let Some(job) = &mut self.job {
+            job.cancel();
+        }
     }
 
     /// Streams new output into the log, and keeps the UI awake while a job runs,
@@ -191,16 +204,6 @@ impl RipAndLoadApp {
                 .clicked()
             {
                 self.check_tools();
-            }
-            if ui
-                .add_enabled(
-                    !self.job_running(),
-                    egui::Button::new("Render Streamrip config"),
-                )
-                .on_hover_text("Debug: writes the app's Streamrip config from these Settings")
-                .clicked()
-            {
-                self.render_streamrip_config();
             }
         });
 
@@ -272,10 +275,8 @@ impl eframe::App for RipAndLoadApp {
             ui.horizontal(|ui| {
                 if self.job_running() {
                     ui.spinner();
-                    if ui.button("Cancel").clicked()
-                        && let Some(job) = &mut self.job
-                    {
-                        job.cancel();
+                    if ui.button("Cancel").clicked() {
+                        self.cancel_job();
                     }
                 }
                 let status = if self.status.is_empty() {
@@ -304,7 +305,12 @@ impl eframe::App for RipAndLoadApp {
 
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Download => {
-                ui.label("Paste URLs here (ticket 06).");
+                let running = self.job_running();
+                match download_tab::show(ui, &mut self.download, running) {
+                    download_tab::Action::Download => self.download(),
+                    download_tab::Action::Cancel => self.cancel_job(),
+                    download_tab::Action::None => {}
+                }
             }
             Tab::Upload => {
                 ui.label("Upload the Staging folder (ticket 07).");
@@ -314,16 +320,4 @@ impl eframe::App for RipAndLoadApp {
 
         self.guard_close(&ctx);
     }
-}
-
-/// "outer error: inner cause: …", since `Display` shows only the outer message.
-pub fn error_chain(err: &dyn std::error::Error) -> String {
-    let mut text = err.to_string();
-    let mut source = err.source();
-    while let Some(cause) = source {
-        text.push_str(": ");
-        text.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    text
 }

@@ -91,3 +91,15 @@ pub enum StreamripConfigError {
     #[error("rip didn't create a default Streamrip config at {path}: {output}")]
     SeedFailed { path: PathBuf, output: String },
 }
+
+/// "outer error: inner cause: …", since `Display` shows only the outer message.
+pub fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut text = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}

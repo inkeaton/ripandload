@@ -9,6 +9,11 @@ use ripandload_core::streamrip_config::{self, Seeded};
 use ripandload_core::tool_env::ToolEnv;
 use tempfile::TempDir;
 
+#[cfg(unix)]
+mod common;
+#[cfg(unix)]
+use common::script_rip;
+
 const PERSONAL_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/personal-streamrip.toml"
@@ -189,16 +194,6 @@ fn rendered_config_is_private() {
 
     let mode = fs::metadata(&s.config).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
-}
-
-/// A `rip` that runs `script` with sh; `$2` is the `--config-path` value.
-#[cfg(unix)]
-fn script_rip(dir: &Path, script: &str) -> ToolEnv {
-    use std::os::unix::fs::PermissionsExt;
-    let rip = dir.join("rip");
-    fs::write(&rip, format!("#!/bin/sh\n{script}\n")).unwrap();
-    fs::set_permissions(&rip, fs::Permissions::from_mode(0o755)).unwrap();
-    ToolEnv::Native { rip: Some(rip) }
 }
 
 #[cfg(unix)]

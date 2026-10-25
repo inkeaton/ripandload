@@ -66,6 +66,20 @@ pub fn seed_config_spec(config: &str) -> CommandSpec {
     CommandSpec::new(Tool::Rip, &["--config-path", config, "config", "path"])
 }
 
+/// A Download: `rip --config-path <config> [-q N] --no-progress url <urls>…`.
+/// `quality` overrides the Settings' Quality for every Source in this run.
+/// The Streamrip config must already be rendered.
+pub fn download_spec(config: &str, urls: &[&str], quality: Option<u8>) -> CommandSpec {
+    let mut spec = CommandSpec::new(Tool::Rip, &["--config-path", config]);
+    if let Some(quality) = quality {
+        spec.args.extend(["-q".to_owned(), quality.to_string()]);
+    }
+    spec.args
+        .extend(["--no-progress", "url"].map(str::to_owned));
+    spec.args.extend(urls.iter().map(|url| url.to_string()));
+    spec
+}
+
 /// Finds the version in `rip --version` output, e.g. `rip, version 2.2.0`.
 pub fn parse_rip_version(line: &str) -> Option<&str> {
     let (_, version) = line.trim().split_once(", version ")?;
@@ -97,6 +111,49 @@ mod tests {
                 "path"
             ]
         );
+    }
+
+    #[test]
+    fn download_spec_uses_the_settings_quality_by_default() {
+        let spec = download_spec(
+            "/cfg/streamrip.toml",
+            &["https://open.qobuz.com/track/1"],
+            None,
+        );
+        assert_eq!(
+            spec.to_string(),
+            "rip --config-path /cfg/streamrip.toml --no-progress url https://open.qobuz.com/track/1"
+        );
+        assert!(spec.env.is_empty());
+    }
+
+    #[test]
+    fn download_spec_passes_a_quality_override() {
+        let spec = download_spec(
+            "/cfg/streamrip.toml",
+            &["https://deezer.com/track/2"],
+            Some(1),
+        );
+        assert_eq!(
+            spec.args,
+            [
+                "--config-path",
+                "/cfg/streamrip.toml",
+                "-q",
+                "1",
+                "--no-progress",
+                "url",
+                "https://deezer.com/track/2",
+            ]
+        );
+    }
+
+    #[test]
+    fn download_spec_takes_every_url_in_order() {
+        let spec = download_spec("/a b/streamrip.toml", &["u1", "u2", "u3"], None);
+        assert_eq!(spec.program, Tool::Rip);
+        assert_eq!(spec.args[1], "/a b/streamrip.toml");
+        assert_eq!(spec.args[spec.args.len() - 4..], ["url", "u1", "u2", "u3"]);
     }
 
     #[test]
