@@ -161,9 +161,24 @@ fn apply(doc: &mut DocumentMut, settings: &Settings, db_dir: &Path) {
 /// Sets `[table] key = value`, creating the table or key if missing.
 /// Comments around an existing key are kept, so the file stays readable.
 pub fn set_managed(doc: &mut DocumentMut, table: &str, key: &str, value: impl Into<Value>) {
-    // 🦀 Exercise (ticket 05): make the `set_managed` tests below pass.
-    let _ = (doc, table, key, value.into()); // delete this line when you start
-    todo!()
+    if !doc.get(table).is_some_and(toml_edit::Item::is_table_like) {
+        doc.insert(table, toml_edit::table());
+    }
+    let table = doc[table]
+        .as_table_like_mut()
+        .expect("just made it a table");
+    let mut value = value.into();
+    match table.get_mut(key) {
+        Some(item) => {
+            if let Some(old) = item.as_value() {
+                *value.decor_mut() = old.decor().clone();
+            }
+            *item = toml_edit::Item::Value(value);
+        }
+        None => {
+            table.insert(key, toml_edit::Item::Value(value));
+        }
+    }
 }
 
 #[cfg(test)]
