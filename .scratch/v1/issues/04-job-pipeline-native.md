@@ -1,6 +1,6 @@
 # 04 – Job pipeline (Native)
 
-Status: ready-for-agent
+Status: ready-for-human
 Blocked by: 03
 
 Part of `../spec.md`.
@@ -22,7 +22,7 @@ The full Settings → CommandSpec → ToolEnv → job thread → log panel pipel
 
 - [ ] Check tools shows `rip` and `rsync` versions in the log; warns if streamrip ≠ 2.2.0.
 - [ ] Missing `rip` gives a clear error, not a panic.
-- [ ] Tests: CommandSpec builders; job runner with fake script (lines arrive in order, exit code reported, Cancel stops it).
+- [x] Tests: CommandSpec builders; job runner with fake script (lines arrive in order, exit code reported, Cancel stops it).
 
 ## 🦀 Exercise
 
@@ -33,3 +33,5 @@ Implement `to_wsl_path(&Path) -> Option<String>` (`C:\Users\a b\Music` → `/mnt
 Threads, `move` closures, `Send`, `mpsc` channels, `BufReader::lines`, `std::process::Command` and `Stdio::piped`, enums with data, `match`.
 
 ## Comments
+
+- 2026-10-25: Pipeline done; waiting on the `to_wsl_path` exercise (stub + failing tests in `crates/ripandload-core/src/wsl_path.rs`) and the manual checks. Departures from the ticket text: `CommandSpec.program` is a `Tool` enum (`Rip`, `Rsync`) and `ToolEnv` resolves it, so `version_specs()` takes no Settings; `ToolEnv::Native { rip }` carries the Settings override; `ToolEnv::Wsl` returns `ToolError::WslNotSupported` until ticket 08. A job is one process; running several commands in a row (Check tools) and the streamrip version check live in the GUI's `job_run.rs`. Review flagged that as logic in the GUI crate: ticket 06 should move it to core when Download adds a second job kind. Cancel only kills the direct child; process-group kill and `pkill` are left for ticket 08.

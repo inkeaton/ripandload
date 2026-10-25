@@ -16,6 +16,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 directories = "6"
 thiserror = "2"
+which = "8"
 rfd = "0.17"
 tempfile = "3"
 

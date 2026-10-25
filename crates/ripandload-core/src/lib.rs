@@ -3,8 +3,11 @@
 //! This crate knows nothing about the GUI, so everything here can be tested
 //! without opening a window.
 
+pub mod command;
 pub mod error;
+pub mod job;
 pub mod settings;
+pub mod tool_env;
 
 /// The app's version, shared by the GUI and any future frontends.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

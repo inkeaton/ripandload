@@ -1,9 +1,16 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use eframe::egui;
+use ripandload_core::command;
 use ripandload_core::settings::Settings;
+use ripandload_core::tool_env::ToolEnv;
 
+use crate::job_run::JobRun;
 use crate::settings_tab;
+
+/// How often to check on a running job for new output.
+const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The three screens of the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -31,6 +38,8 @@ pub struct RipAndLoadApp {
     /// Output of the current or last job, one entry per line.
     log: Vec<String>,
     status: String,
+    /// The current or last job. Only one runs at a time.
+    job: Option<JobRun>,
     /// What the Settings tab is editing.
     settings: Settings,
     /// What's on disk, to tell whether there are unsaved changes.
@@ -66,6 +75,7 @@ impl RipAndLoadApp {
             tab: Tab::default(),
             log: Vec::new(),
             status,
+            job: None,
             saved_settings: settings.clone(),
             settings,
             settings_path,
@@ -76,6 +86,39 @@ impl RipAndLoadApp {
 
     fn has_unsaved_changes(&self) -> bool {
         self.settings != self.saved_settings
+    }
+
+    fn job_running(&self) -> bool {
+        self.job.as_ref().is_some_and(|job| !job.is_finished())
+    }
+
+    /// Runs "Check tools" with the Settings as edited, saved or not.
+    fn check_tools(&mut self) {
+        self.log.clear();
+        let job = JobRun::start(
+            "Check tools",
+            ToolEnv::from_settings(&self.settings),
+            command::version_specs(),
+            &mut self.log,
+        );
+        self.status = job.status();
+        self.job = Some(job);
+    }
+
+    /// Streams new output into the log, and keeps the UI awake while a job runs,
+    /// since the job thread can't wake it up by itself.
+    fn poll_job(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.job else {
+            return;
+        };
+        if job.is_finished() {
+            return;
+        }
+        job.poll(&mut self.log);
+        self.status = job.status();
+        if !job.is_finished() {
+            ctx.request_repaint_after(JOB_POLL_INTERVAL);
+        }
     }
 
     /// Returns whether the save worked.
@@ -106,6 +149,14 @@ impl RipAndLoadApp {
             }
             if dirty {
                 ui.colored_label(ui.visuals().warn_fg_color, "• unsaved changes");
+            }
+            ui.separator();
+            if ui
+                .add_enabled(!self.job_running(), egui::Button::new("Check tools"))
+                .on_hover_text("Runs rip --version and rsync --version")
+                .clicked()
+            {
+                self.check_tools();
             }
         });
 
@@ -160,6 +211,9 @@ impl RipAndLoadApp {
 
 impl eframe::App for RipAndLoadApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.poll_job(&ctx);
+
         // Panels claim space from the outside in: add the edges first,
         // and the central panel last takes whatever is left.
         egui::Panel::top("tabs").show(ui, |ui| {
@@ -171,12 +225,22 @@ impl eframe::App for RipAndLoadApp {
         });
 
         egui::Panel::bottom("status").show(ui, |ui| {
-            let status = if self.status.is_empty() {
-                "Idle"
-            } else {
-                &self.status
-            };
-            ui.label(status);
+            ui.horizontal(|ui| {
+                if self.job_running() {
+                    ui.spinner();
+                    if ui.button("Cancel").clicked()
+                        && let Some(job) = &mut self.job
+                    {
+                        job.cancel();
+                    }
+                }
+                let status = if self.status.is_empty() {
+                    "Idle"
+                } else {
+                    &self.status
+                };
+                ui.label(status);
+            });
         });
 
         egui::Panel::bottom("log")
@@ -204,13 +268,12 @@ impl eframe::App for RipAndLoadApp {
             Tab::Settings => self.settings_tab(ui),
         });
 
-        let ctx = ui.ctx().clone();
         self.guard_close(&ctx);
     }
 }
 
 /// "outer error: inner cause: …", since `Display` shows only the outer message.
-fn error_chain(err: &dyn std::error::Error) -> String {
+pub fn error_chain(err: &dyn std::error::Error) -> String {
     let mut text = err.to_string();
     let mut source = err.source();
     while let Some(cause) = source {
