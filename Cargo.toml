@@ -9,6 +9,15 @@ license = "MIT"
 
 [workspace.dependencies]
 ripandload-core = { path = "crates/ripandload-core" }
-eframe = "0.37"
+eframe = { version = "0.37", features = ["glow"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+strip = true
+
+# Release speed, but keeps the console window (see main.rs) so logs are visible.
+# Used to diagnose Windows rendering issues.
+[profile.release-console]
+inherits = "release"
+debug-assertions = true

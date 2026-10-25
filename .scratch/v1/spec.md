@@ -25,7 +25,7 @@ Cargo workspace, edition 2024, MIT licence.
   - `job`: runs a `Command` on a `std::thread`, sends `JobEvent::{Line, Finished}` over `mpsc`; Cancel kills the child (plus best-effort `pkill` under WSL).
   - `staging`: count and clear the Staging folder's contents.
   - `error`: `thiserror` enums.
-- `crates/ripandload` (bin): eframe app. Tabs Download | Upload | Settings, shared log panel and status line, drains `JobEvent`s each frame and calls `request_repaint()`. Explicit Save with unsaved marker and exit prompt. `#![windows_subsystem = "windows"]`.
+- `crates/ripandload` (bin): eframe app. Tabs Download | Upload | Settings, shared log panel and status line, drains `JobEvent`s each frame and calls `request_repaint()`. Explicit Save with unsaved marker and exit prompt. `#![windows_subsystem = "windows"]` (release builds). Renders with glow (OpenGL); wgpu glitches on resize on Windows (`RIPANDLOAD_RENDERER=wgpu` overrides).
 
 Flow: `Settings` → `CommandSpec` builder → `ToolEnv` → `Command` → `job` thread → channel → UI.
 

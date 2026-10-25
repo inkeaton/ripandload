@@ -24,6 +24,7 @@ The full flow on Windows 11 with streamrip and rsync inside WSL (ADR 0001).
 - [ ] Download lands in `%USERPROFILE%\Music\ripandload`.
 - [ ] Upload with a key picked from a Windows path works.
 - [ ] No console windows flash.
+- [ ] The glow (OpenGL) renderer is smooth on at least one friend's AMD or NVIDIA desktop (see ticket 02).
 - [ ] Cancel stops the download inside WSL.
 - [ ] Tests: WSL wrapping of CommandSpecs, UTF-16 decoding.
 
