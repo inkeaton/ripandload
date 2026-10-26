@@ -1,6 +1,6 @@
 # 04 – Link Preview
 
-Status: ready-for-human
+Status: done
 
 Part of `../spec.md` (section 4).
 
@@ -29,4 +29,4 @@ Part of `../spec.md` (section 4).
 
 - 2026-10-26: Implemented. `core::preview` has `parse` (URL → Source, kind, ID), `describe` (API JSON → text) and `fetch` (the `ureq` calls). `streamrip_config::qobuz_app_id` reads the `app_id`, and the Download tab keeps a per-URL cache with one lookup thread per new URL. Departure from the spec: Qobuz needs the auth token as well as `app_id` (401 without it), so with an empty token the line says `no preview without a Qobuz auth token in Settings`. The fixtures are real responses from 2026-10-26, cut down to the fields read. I checked `fetch` against the live APIs for every kind on both Sources (`open.`, `play.` and `www.qobuz.com/<locale>/…`), an unknown ID (`no preview`), a label URL (`no preview`) and an empty token. Not checked: a working share link. The `deezer.page.link` sample answers 404 (Firebase Dynamic Links is shut down), and I didn't have a current `link.deezer.com/s/…` link to try. Unavailable results are cached for the session too, so a Qobuz URL pasted before the first Qobuz Download keeps its message until the app restarts. The manual checks in the app are still to do.
 - 2026-10-26: Review fixes. `www.qobuz.com/<locale>/playlists/…` and `/interpreter/<slug>/<id>` are parsed too (the www site's words, checked live). Only `deezer.page.link`, `dzr.page.link` and `link.deezer.com` are followed as share links; other unreadable Deezer URLs aren't fetched. New URLs are looked up once the text box has been still for 500 ms. URLs without a Preview are tried again when the Qobuz auth token changes or a job finishes, so the "until the first Qobuz Download" message clears itself; answers to lookups started before a retry are dropped. `PreviewError` names the Source instead of a host.
-
+- 2026-10-26: The user tried the app and the Previews work. The acceptance items weren't reported one by one, so their boxes stay as they were. A working Deezer share link is still untested. Release builds for Linux and Windows (`x86_64-pc-windows-gnu`) built, and `cargo clippy --all-targets -- -D warnings` is clean. Closed.

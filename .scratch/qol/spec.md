@@ -1,6 +1,6 @@
 # Quality-of-life features after v1
 
-Status: in progress
+Status: done
 
 Small features asked for after the v1 hand-off. Vocabulary follows `GLOSSARY.md`. Sections 1–3 and section 4 were each decided in a grilling session on 2026-10-26.
 
