@@ -1,6 +1,6 @@
 # 03 – Download progress
 
-Status: ready-for-agent
+Status: ready-for-human
 
 Part of `../spec.md` (section 3).
 
@@ -12,7 +12,7 @@ Part of `../spec.md` (section 3).
 
 ## Acceptance
 
-- [ ] On Linux and Windows (rich 13 in the WSL venv), the bars move while a Download runs.
+- [x] On Linux and Windows (rich 13 in the WSL venv), the bars move while a Download runs.
 - [ ] The log and `ripandload.log` hold the static lines, no progress redraws.
 - [x] Tests: recorded rich 13 output turns into the expected log lines and live rows.
 
@@ -21,3 +21,5 @@ Part of `../spec.md` (section 3).
 - 2026-10-26: Done; waiting on the manual checks with a real Download on Linux and Windows. Departures from the spec, both forced by what rich does: (1) No `vt100`. The hard part is knowing which rows are finished, and a terminal emulator doesn't answer that, so `core::live_output::LiveOutput` interprets the few codes rich uses (`\r`, `\n`, `ESC[nA`, `ESC[2K`, `ESC[?25l/h`, skipping colours and OSC 8 hyperlinks). Rows above where the latest redraw starts writing are finished lines. The live rows are dropped when the cursor shows again, and on Cancel. (2) rich ends a frame without a newline, so with the line reader the bottom track's bar would never show. `Job::spawn_raw` forwards byte chunks, and `LiveOutput` keeps an escape sequence or character cut off at a chunk's end. NULs are skipped, so a UTF-16 error from wsl.exe still reads as ASCII. Facts found on the way: `ProgressManager` builds `Live` on rich's global console, which is also the one `RichHandler` logs to, so streamrip's errors print cleanly above the bars. Its `console.print` uses another console and would garble them, but it's only used for the credential prompts. RichHandler leaves out a timestamp repeated within the same second. Checked end to end with a fake `rip` running streamrip's real `ProgressManager` under rich 13.9.4 through `JobRun::download`: bars in `live_rows`, log lines in the log, no progress logged. That throwaway test was deleted because it depends on a local venv. In its first run the final `INFO Finished` line was missing from the log; I couldn't reproduce that in 26 runs afterwards. Watch for a missing last line in the manual checks. The fixture `tests/fixtures/rich13-progress.out` was recorded with `COLUMNS=60`; the app uses `command::PROGRESS_COLUMNS` (100).
 
 - 2026-10-26: Review fixes. A one-row Live display (only "Downloading …" left between tracks) redraws with `\r ESC[2K` and no cursor-up, so a line logged then was lost; `\r` now starts a redraw too, and the new fixture `rich13-one-row.out` covers it. stdout and stderr each get their own `LiveOutput` (`JobEvent::Output { stream, bytes }`), and an escape sequence longer than 4 KiB is skipped instead of buffered forever. The end-to-end check (fake `rip` running streamrip's `ProgressManager` under rich 13) passed 5 of 5 runs with both recordings; the earlier missing last line didn't come back.
+
+- 2026-10-26: The user tested on Linux and Windows: the progress bars show and move, and Downloads work. Still open: checking that the log panel and `ripandload.log` hold streamrip's messages and no progress lines.
