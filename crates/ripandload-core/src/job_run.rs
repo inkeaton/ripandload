@@ -3,7 +3,7 @@
 //! frame; nothing here blocks.
 
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 
 use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
@@ -17,6 +17,7 @@ enum Kind {
     CheckTools,
     Download,
     Upload,
+    Compare,
     TestConnection,
 }
 
@@ -27,6 +28,7 @@ impl Kind {
             Kind::CheckTools => "Check tools",
             Kind::Download => "Download",
             Kind::Upload => "Upload",
+            Kind::Compare => "Compare with Server",
             Kind::TestConnection => "Test connection",
         }
     }
@@ -39,7 +41,7 @@ impl Kind {
 
     /// "Download finished" rather than "Download: all good".
     fn says_finished(self) -> bool {
-        matches!(self, Kind::Download | Kind::Upload)
+        matches!(self, Kind::Download | Kind::Upload | Kind::Compare)
     }
 }
 
@@ -56,6 +58,9 @@ pub struct JobRun {
     current: Option<(CommandSpec, Job)>,
     /// The version `rip --version` printed, if the current step is that.
     rip_version: Option<String>,
+    /// For Compare with Server: the files an Upload would send, relative to
+    /// the Staging folder.
+    to_send: Vec<PathBuf>,
     problems: usize,
     cancelled: bool,
 }
@@ -92,6 +97,22 @@ impl JobRun {
         Self::start(Kind::Upload, tool_env, specs, log)
     }
 
+    /// The Upload as a dry run (`command::compare_spec`), to find out which
+    /// files the Server doesn't have yet. See `to_send`.
+    pub fn compare(
+        tool_env: ToolEnv,
+        staging: &Path,
+        server: &Server,
+        log: &mut Vec<String>,
+    ) -> Self {
+        let specs = tool_env.ssh_ready(server).and_then(|(server, copy_key)| {
+            let staging = tool_env.tool_path(staging)?;
+            let compare = command::compare_spec(Path::new(&staging), &server);
+            Ok(copy_key.into_iter().chain([compare]).collect())
+        });
+        Self::start(Kind::Compare, tool_env, specs, log)
+    }
+
     /// The ssh checks from `command::test_connection_specs`, after copying
     /// the SSH key into WSL if the tools run there.
     pub fn test_connection(tool_env: ToolEnv, server: &Server, log: &mut Vec<String>) -> Self {
@@ -117,6 +138,7 @@ impl JobRun {
             queue: VecDeque::new(),
             current: None,
             rip_version: None,
+            to_send: Vec::new(),
             problems: 0,
             cancelled: false,
         };
@@ -169,6 +191,12 @@ impl JobRun {
         }
     }
 
+    /// After a Compare with Server that worked: the files an Upload would
+    /// send, relative to the Staging folder.
+    pub fn to_send(&self) -> Option<&[PathBuf]> {
+        (self.kind == Kind::Compare && self.succeeded()).then_some(&self.to_send)
+    }
+
     pub fn status(&self) -> String {
         let name = self.kind.name();
         match (&self.current, self.cancelled, self.problems) {
@@ -182,6 +210,13 @@ impl JobRun {
     }
 
     fn on_line(&mut self, line: String, log: &mut Vec<String>) {
+        // One line per file would bury the log on a first comparison.
+        if self.kind == Kind::Compare
+            && let Some(file) = command::itemized_file(&line)
+        {
+            self.to_send.push(PathBuf::from(file));
+            return;
+        }
         if let Some((spec, _)) = &self.current
             && *spec == command::pyenv_probe_spec()
         {
@@ -252,7 +287,7 @@ impl JobRun {
                     spec.program.name()
                 );
             }
-            (Kind::TestConnection | Kind::Upload, SSH_FAILED) => {
+            (Kind::TestConnection | Kind::Upload | Kind::Compare, SSH_FAILED) => {
                 "couldn't reach or log in to the Server; check its host, port, user and SSH key"
             }
             (Kind::TestConnection, _) => "the music folder doesn't exist or isn't writable",

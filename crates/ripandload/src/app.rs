@@ -12,7 +12,7 @@ use ripandload_core::tool_env::ToolEnv;
 
 use crate::download_tab::{self, DownloadForm};
 use crate::settings_tab;
-use crate::upload_tab::{self, StagingCount};
+use crate::upload_tab::{self, Comparison, Scan, StagingScan, plural};
 
 /// How often to check on a running job for new output.
 const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -43,7 +43,9 @@ impl Tab {
 /// What the "clear Staging folder?" dialog shows.
 #[derive(Debug, Clone, Copy)]
 struct ClearPrompt {
-    files: usize,
+    music: usize,
+    /// Covers and anything else that isn't music.
+    other: usize,
     /// It opened by itself after an Upload, rather than from Clear….
     after_upload: bool,
 }
@@ -56,9 +58,11 @@ pub struct RipAndLoadApp {
     /// The current or last job. Only one runs at a time.
     job: Option<JobRun>,
     download: DownloadForm,
-    staging_count: StagingCount,
-    /// The current job is an Upload; offer to clear the Staging folder if it works.
-    offer_clear_after_job: bool,
+    staging_scan: StagingScan,
+    /// The last Compare with Server, or the last successful Upload.
+    comparison: Option<Comparison>,
+    /// The current job is an Upload: if it works, everything is on the Server.
+    uploading: bool,
     /// The "clear Staging folder?" dialog is open.
     confirming_clear: Option<ClearPrompt>,
     /// What the Settings tab is editing.
@@ -98,8 +102,9 @@ impl RipAndLoadApp {
             status,
             job: None,
             download: DownloadForm::default(),
-            staging_count: StagingCount::default(),
-            offer_clear_after_job: false,
+            staging_scan: StagingScan::default(),
+            comparison: None,
+            uploading: false,
             confirming_clear: None,
             saved_settings: settings.clone(),
             settings,
@@ -187,7 +192,7 @@ impl RipAndLoadApp {
             &mut self.log,
         );
         self.start_job(job);
-        self.offer_clear_after_job = self.settings.offer_clear_after_upload;
+        self.uploading = true;
     }
 
     fn test_connection(&mut self) {
@@ -204,31 +209,53 @@ impl RipAndLoadApp {
         self.start_job(job);
     }
 
+    /// Lists what an Upload would send, without sending it.
+    fn compare(&mut self) {
+        self.log.clear();
+        let Some(server) = self.settings.active_server() else {
+            self.status = NO_SERVER.into();
+            return;
+        };
+        let job = JobRun::compare(
+            ToolEnv::from_settings(&self.settings),
+            &self.settings.staging_folder,
+            server,
+            &mut self.log,
+        );
+        self.start_job(job);
+    }
+
     /// Asks before clearing, showing how many files would go.
-    fn ask_to_clear(&mut self) {
-        match staging::count_files(&self.settings.staging_folder) {
-            Ok(0) => self.status = "The Staging folder is already empty.".into(),
-            Ok(files) => {
-                self.confirming_clear = Some(ClearPrompt {
-                    files,
-                    after_upload: false,
-                })
+    fn ask_to_clear(&mut self, after_upload: bool) {
+        match Scan::read(&self.settings.staging_folder) {
+            Ok(scan) if scan.files == 0 => {
+                if !after_upload {
+                    self.status = "The Staging folder is already empty.".into();
+                }
             }
-            Err(err) => self.status = error_chain(&err),
+            Ok(scan) => {
+                let music = scan.music_files().count();
+                self.confirming_clear = Some(ClearPrompt {
+                    music,
+                    other: scan.files - music,
+                    after_upload,
+                });
+            }
+            Err(err) => self.status = err,
         }
     }
 
     fn clear_staging(&mut self) {
         let folder = &self.settings.staging_folder;
         self.status = match staging::clear(folder) {
-            Ok(files) => format!("Cleared {} ({})", folder.display(), plural_files(files)),
+            Ok(files) => format!("Cleared {} ({})", folder.display(), plural(files, "file")),
             Err(err) => {
                 tracing::error!(error = %error_chain(&err), "couldn't clear the Staging folder");
                 error_chain(&err)
             }
         };
         self.log.push(self.status.clone());
-        self.staging_count.invalidate();
+        self.staging_scan.invalidate();
     }
 
     fn start_job(&mut self, job: JobRun) {
@@ -258,15 +285,22 @@ impl RipAndLoadApp {
             return;
         }
         // Downloads and Uploads change what's in the Staging folder.
-        self.staging_count.invalidate();
-        if std::mem::take(&mut self.offer_clear_after_job)
-            && job.succeeded()
-            && let Ok(files @ 1..) = staging::count_files(&self.settings.staging_folder)
-        {
-            self.confirming_clear = Some(ClearPrompt {
-                files,
-                after_upload: true,
-            });
+        self.staging_scan.invalidate();
+        let upload_worked = std::mem::take(&mut self.uploading) && job.succeeded();
+        // An Upload that worked sent everything, so there's nothing to ask the Server.
+        let to_send = if upload_worked {
+            Some(&[][..])
+        } else {
+            job.to_send()
+        };
+        if let Some(to_send) = to_send {
+            match Comparison::new(&self.settings.staging_folder, to_send) {
+                Ok(comparison) => self.comparison = Some(comparison),
+                Err(err) => self.status = err,
+            }
+        }
+        if upload_worked && self.settings.offer_clear_after_upload {
+            self.ask_to_clear(true);
         }
     }
 
@@ -360,14 +394,24 @@ impl RipAndLoadApp {
 
     fn confirm_clear(&mut self, ctx: &egui::Context) {
         let Some(ClearPrompt {
-            files,
+            music,
+            other,
             after_upload,
         }) = self.confirming_clear
         else {
             return;
         };
         let modal = egui::Modal::new(egui::Id::unique("confirm_clear")).show(ctx, |ui| {
-            ui.heading(format!("Clear Staging folder? ({})", plural_files(files)));
+            let what = match (music, other) {
+                (0, other) => plural(other, "file"),
+                (music, 0) => plural(music, "music file"),
+                (music, other) => format!(
+                    "{}, plus {}",
+                    plural(music, "music file"),
+                    plural(other, "other file")
+                ),
+            };
+            ui.heading(format!("Clear Staging folder? ({what})"));
             ui.label(format!(
                 "Deletes everything in {} from this computer. The Server keeps its copy.",
                 self.settings.staging_folder.display()
@@ -460,12 +504,14 @@ impl eframe::App for RipAndLoadApp {
                     ui,
                     self.settings.active_server(),
                     &self.settings.staging_folder,
-                    &mut self.staging_count,
+                    &mut self.staging_scan,
+                    self.comparison.as_ref(),
                     running,
                 ) {
                     upload_tab::Action::Upload => self.upload(),
+                    upload_tab::Action::Compare => self.compare(),
                     upload_tab::Action::Cancel => self.cancel_job(),
-                    upload_tab::Action::Clear => self.ask_to_clear(),
+                    upload_tab::Action::Clear => self.ask_to_clear(false),
                     upload_tab::Action::None => {}
                 }
             }
@@ -474,12 +520,5 @@ impl eframe::App for RipAndLoadApp {
 
         self.confirm_clear(&ctx);
         self.guard_close(&ctx);
-    }
-}
-
-fn plural_files(files: usize) -> String {
-    match files {
-        1 => "1 file".to_owned(),
-        n => format!("{n} files"),
     }
 }

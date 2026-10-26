@@ -19,6 +19,8 @@ Part of `../spec.md` (section 2).
 - [ ] Covers and other non-music files aren't counted.
 - [ ] Compare against the Docker SSH target and the real Server shows the right new files.
 - [ ] An `Artist/Album` folder template and a multi-disc album group correctly.
-- [ ] Tests: music-file test, grouping (flat, nested, disc folders, loose files), itemize parsing, managed key.
+- [x] Tests: music-file test, grouping (flat, nested, disc folders, loose files), itemize parsing, managed key.
 
 ## Comments
+
+- 2026-10-26: Done; waiting on the manual checks against the real Server and a real streamrip layout. `staging::is_music`, `staging::music_groups` (disc folders: `disc`/`cd`, optional space, digits), `command::compare_spec` (Upload args plus `--dry-run --itemize-changes --8-bit-output`; without `-8`, rsync in the C locale writes `Bj\#303\#266rk`), `command::itemized_file` (`<f`/`>f` codes only), `JobRun::compare` (itemized files are collected, not logged), managed `downloads.source_subdirectories = false`. Checked against the Docker SSH target with a new ignored test: after an Upload, a new album with a cover in a `Disc 1` folder and a non-ASCII name comes back as exactly its two files, and nothing is sent. One departure from the spec: instead of marking a comparison stale after a Download, `Comparison` remembers which music files existed when it ran, and any file that appeared later counts as to upload. That also covers files added by hand. The tab shows when it compared ("5 min ago"). The Staging folder is rescanned every 2 s while the Upload tab is open, as the count was before; a very large offline library might make that noticeable.

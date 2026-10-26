@@ -163,3 +163,36 @@ fn upload_copies_staging_once_and_never_deletes() {
     assert!(!log.iter().any(|line| line.ends_with(".flac")), "{log:#?}");
     assert!(music.join("already there.flac").exists());
 }
+
+#[test]
+#[ignore = "needs dev/ssh-target.sh"]
+fn compare_lists_only_what_the_server_lacks_and_sends_nothing() {
+    let music = fresh_music_folder();
+    let staging = tempfile::tempdir().unwrap();
+    let write = |file: &str| {
+        let path = staging.path().join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "x").unwrap();
+    };
+    write("Old - Album (2020)/01. Song.flac");
+    let (job, log) = upload(staging.path());
+    assert!(job.succeeded(), "{log:#?}");
+
+    write("Björk - Debut (1993)/Disc 1/01. Human Behaviour.flac");
+    write("Björk - Debut (1993)/cover.jpg");
+    let mut log = Vec::new();
+    let job = JobRun::compare(native(), staging.path(), &server(), &mut log);
+    let (job, log) = run_to_end(job, log);
+
+    assert!(job.succeeded(), "{log:#?}");
+    assert_eq!(job.status(), "Compare with Server finished");
+    assert_eq!(
+        job.to_send().unwrap(),
+        // rsync lists a folder's files before its subfolders.
+        [
+            PathBuf::from("Björk - Debut (1993)/cover.jpg"),
+            PathBuf::from("Björk - Debut (1993)/Disc 1/01. Human Behaviour.flac"),
+        ]
+    );
+    assert!(!music.join("Björk - Debut (1993)").exists());
+}

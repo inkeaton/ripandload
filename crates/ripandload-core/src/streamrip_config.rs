@@ -158,6 +158,8 @@ fn apply(
     set_managed(doc, "filepaths", "folder_format", &settings.naming.folder);
     set_managed(doc, "filepaths", "track_format", &settings.naming.track);
     set_managed(doc, "downloads", "folder", staging);
+    // A `Qobuz/` or `Deezer/` folder would end up in the Navidrome library.
+    set_managed(doc, "downloads", "source_subdirectories", false);
     set_managed(doc, "database", "downloads_path", downloads_db);
     set_managed(doc, "database", "failed_downloads_path", failed_db);
     Ok(())

@@ -100,6 +100,10 @@ fn seeded_from_personal_config_with_managed_keys_from_settings() {
     );
     assert_eq!(*get(&config, "downloads", "folder"), path_str(&staging));
     assert_eq!(
+        *get(&config, "downloads", "source_subdirectories"),
+        false.into()
+    );
+    assert_eq!(
         *get(&config, "database", "downloads_path"),
         path_str(&db_dir.join("downloads.db"))
     );

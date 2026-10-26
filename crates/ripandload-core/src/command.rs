@@ -118,6 +118,33 @@ pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
     ]
 }
 
+/// The Upload's rsync as a dry run: it sends nothing, and lists each file an
+/// Upload would send, one `itemized_file` line each. `--8-bit-output` keeps
+/// names like "Björk" readable when rsync runs in the C locale, as in WSL.
+pub fn compare_spec(staging: &Path, server: &Server) -> CommandSpec {
+    let mut args = rsync_args(server, staging);
+    args.splice(
+        3..3,
+        ["--dry-run", "--itemize-changes", "--8-bit-output"].map(String::from),
+    );
+    CommandSpec {
+        program: Tool::Rsync,
+        args,
+        env: Vec::new(),
+    }
+}
+
+/// The file in one line of `compare_spec`'s output, relative to the Staging
+/// folder, if rsync would send it. A line is an 11-letter code, a space and
+/// the name. The code starts `<f` for a file sent to the Server (`>f` when
+/// copying locally); folders, attribute-only changes and rsync's chatter
+/// don't count.
+pub fn itemized_file(line: &str) -> Option<&str> {
+    let (code, name) = line.split_once(' ')?;
+    let sent = code.len() == 11 && (code.starts_with("<f") || code.starts_with(">f"));
+    sent.then_some(name)
+}
+
 fn check_trailing_slash(value: &str) -> String {
     if value.ends_with("/") {
         value.to_string()
@@ -317,6 +344,48 @@ mod tests {
                 "ssh -i /home/mari/.ssh/navidrome_rsync_key -p 21 -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
                 "/home/mari/Music/ripandload/",
                 "fance@music.example.org:/srv/subsonic/Music/",
+            ]
+        );
+    }
+
+    #[test]
+    fn compare_is_the_upload_as_a_dry_run_that_lists_each_file() {
+        let staging = Path::new("/home/mari/Music/ripandload");
+        let upload = upload_spec(staging, &server());
+        let compare = compare_spec(staging, &server());
+
+        assert_eq!(compare.program, Tool::Rsync);
+        assert_eq!(compare.args[..3], upload.args[..3]);
+        assert_eq!(
+            compare.args[3..6],
+            ["--dry-run", "--itemize-changes", "--8-bit-output"]
+        );
+        assert_eq!(compare.args[6..], upload.args[3..]);
+    }
+
+    #[test]
+    fn itemized_lines_give_the_files_an_upload_would_send() {
+        // Recorded from `rsync -rtv --dry-run --itemize-changes --8-bit-output`.
+        let output = "\
+sending incremental file list
+cd+++++++++ Björk - Debut/
+>f+++++++++ Björk - Debut/cover.jpg
+cd+++++++++ Björk - Debut/Disc 1/
+<f+++++++++ Björk - Debut/Disc 1/01. Human Behaviour.flac
+<f.st...... Old/02. Changed.flac
+.f...p..... Old/03. Same.flac
+
+sent 228 bytes  received 27 bytes  510.00 bytes/sec
+total size is 6  speedup is 0.02 (DRY RUN)";
+
+        let files: Vec<_> = output.lines().filter_map(itemized_file).collect();
+
+        assert_eq!(
+            files,
+            [
+                "Björk - Debut/cover.jpg",
+                "Björk - Debut/Disc 1/01. Human Behaviour.flac",
+                "Old/02. Changed.flac",
             ]
         );
     }
