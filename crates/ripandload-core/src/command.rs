@@ -114,7 +114,7 @@ pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
     ]
 }
 
-pub fn check_trailing_slash(value: &str) -> String {
+fn check_trailing_slash(value: &str) -> String {
     if value.ends_with("/") {
         value.to_string()
     } else {
