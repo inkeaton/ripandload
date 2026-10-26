@@ -24,7 +24,8 @@ Cargo workspace, edition 2024, MIT licence.
   - `tool_env`: `enum ToolEnv { Native, Wsl { distro } }` turns a `CommandSpec` into `std::process::Command`. WSL: wraps in `wsl.exe -d <distro> --exec sh -c <wrapper>` (the wrapper expands `~` in the program and records its pid for Cancel), translates Windows paths to `/mnt/<drive>/…`, copies the SSH key into WSL with `chmod 600`, sets `CREATE_NO_WINDOW`, decodes `wsl.exe`'s own UTF-16 messages.
   - `job`: runs a `Command` on a `std::thread`, sends `JobEvent::{Line, Finished}` over `mpsc`; Cancel kills the child (plus best-effort `pkill` under WSL).
   - `staging`: count and clear the Staging folder's contents.
-  - `error`: `thiserror` enums.
+  - `log_file`: `ripandload.log` in the platform data dir, the previous run kept as `ripandload.old.log`.
+  - `error`: `thiserror` enums; `error_chain` renders one for the status line and the log file.
 - `crates/ripandload` (bin): eframe app. Tabs Download | Upload | Settings, shared log panel and status line, drains `JobEvent`s each frame and calls `request_repaint()`. Explicit Save with unsaved marker and exit prompt. `#![windows_subsystem = "windows"]` (release builds). Renders with glow (OpenGL); wgpu glitches on resize on Windows (`RIPANDLOAD_RENDERER=wgpu` overrides).
 
 Flow: `Settings` → `CommandSpec` builder → `ToolEnv` → `Command` → `job` thread → channel → UI.

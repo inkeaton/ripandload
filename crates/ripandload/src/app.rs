@@ -71,7 +71,7 @@ impl RipAndLoadApp {
 
         let settings = match &settings_path {
             Some(path) => Settings::load(path).unwrap_or_else(|err| {
-                tracing::error!(error = ?err, "couldn't load Settings");
+                tracing::error!(error = %error_chain(&err), "couldn't load Settings");
                 status = format!(
                     "{}. Using defaults; saving will replace it.",
                     error_chain(&err)
@@ -127,19 +127,22 @@ impl RipAndLoadApp {
             return;
         };
         let personal = streamrip_config::personal_path();
-        let seeded_from =
-            match streamrip_config::render(&config, personal.as_deref(), &self.settings, &tool_env)
-            {
-                Ok(Seeded::AlreadyThere) => None,
-                Ok(Seeded::FromPersonal) => Some("your personal streamrip config"),
-                Ok(Seeded::FromRip) => Some("streamrip's defaults"),
-                Err(err) => {
-                    tracing::error!(error = ?err, "couldn't render the Streamrip config");
-                    self.status = error_chain(&err);
-                    self.log.push(format!("✗ {}", self.status));
-                    return;
-                }
-            };
+        let seeded_from = match streamrip_config::render(
+            &config,
+            personal.as_deref(),
+            &self.settings,
+            &tool_env,
+        ) {
+            Ok(Seeded::AlreadyThere) => None,
+            Ok(Seeded::FromPersonal) => Some("your personal streamrip config"),
+            Ok(Seeded::FromRip) => Some("streamrip's defaults"),
+            Err(err) => {
+                tracing::error!(error = %error_chain(&err), "couldn't render the Streamrip config");
+                self.status = error_chain(&err);
+                self.log.push(format!("✗ {}", self.status));
+                return;
+            }
+        };
         if let Some(from) = seeded_from {
             self.log.push(format!(
                 "Created the Streamrip config at {} from {from}",
@@ -207,7 +210,7 @@ impl RipAndLoadApp {
         self.status = match staging::clear(folder) {
             Ok(files) => format!("Cleared {} ({})", folder.display(), plural_files(files)),
             Err(err) => {
-                tracing::error!(error = ?err, "couldn't clear the Staging folder");
+                tracing::error!(error = %error_chain(&err), "couldn't clear the Staging folder");
                 error_chain(&err)
             }
         };
@@ -264,7 +267,7 @@ impl RipAndLoadApp {
                 true
             }
             Err(err) => {
-                tracing::error!(error = ?err, "couldn't save Settings");
+                tracing::error!(error = %error_chain(&err), "couldn't save Settings");
                 self.status = error_chain(&err);
                 false
             }

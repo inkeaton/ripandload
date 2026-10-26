@@ -197,6 +197,7 @@ impl JobRun {
         {
             self.rip_version = Some(version.to_owned());
         }
+        tracing::info!("{line}");
         log.push(line);
     }
 
@@ -204,6 +205,7 @@ impl JobRun {
         let Some((spec, _)) = self.current.take() else {
             return;
         };
+        tracing::info!(?outcome, "{spec} ended");
         match outcome {
             // Finding nothing isn't a problem of its own.
             _ if spec == command::pyenv_probe_spec() => {}
@@ -285,6 +287,7 @@ impl JobRun {
     /// as a problem.
     fn start_next(&mut self, log: &mut Vec<String>) {
         while let Some(spec) = self.queue.pop_front() {
+            tracing::info!("$ {spec}");
             log.push(format!("$ {spec}"));
             let job = self
                 .tool_env
