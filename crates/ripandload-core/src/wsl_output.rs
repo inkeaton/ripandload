@@ -19,9 +19,26 @@ pub fn decode_tool_output(bytes: &[u8]) -> String {
 /// previous line's `\n`; that one is dropped. Otherwise it's UTF-8.
 /// Either way, anything that can't be decoded becomes `�`.
 pub fn decode_wsl_output(bytes: &[u8]) -> String {
-    // 🦀 Exercise (ticket 08): make the tests below pass.
-    let _ = bytes; // delete this line when you start
-    todo!()
+    let bytes = if bytes.first() == Some(&0) && bytes.len() % 2 == 1 {
+        &bytes[1..]
+    } else {
+        bytes
+    };
+
+    if bytes.contains(&0) {
+        // this is UTF-16 coded
+        let char_list = bytes
+            .chunks(2)
+            .map(|pair| match pair {
+                [low, high] => u16::from_le_bytes([*low, *high]),
+                _ => char::REPLACEMENT_CHARACTER as u16,
+            })
+            .collect::<Vec<u16>>();
+        String::from_utf16_lossy(&char_list)
+    } else {
+        // this is UTF-8 coded
+        String::from_utf8_lossy(bytes).into_owned()
+    }
 }
 
 #[cfg(test)]
