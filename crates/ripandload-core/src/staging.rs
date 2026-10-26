@@ -1,10 +1,11 @@
 //! The Staging folder: how many files are waiting to be Uploaded, and
 //! clearing them out afterwards.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::error::StagingError;
 
@@ -37,6 +38,89 @@ pub struct MusicGroup {
     pub files: Vec<PathBuf>,
 }
 
+/// What's in the Staging folder: its music, grouped, and how many files in all.
+#[derive(Debug, Clone)]
+pub struct StagingContents {
+    pub groups: Vec<MusicGroup>,
+    /// Every file, music or not.
+    files: usize,
+}
+
+impl StagingContents {
+    pub fn read(folder: &Path) -> Result<Self, StagingError> {
+        Ok(Self {
+            groups: music_groups(folder)?,
+            files: count_files(folder)?,
+        })
+    }
+
+    /// Relative to the Staging folder.
+    pub fn music_files(&self) -> impl Iterator<Item = &Path> {
+        self.groups
+            .iter()
+            .flat_map(|group| &group.files)
+            .map(PathBuf::as_path)
+    }
+
+    pub fn music_count(&self) -> usize {
+        self.groups.iter().map(|group| group.files.len()).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.files == 0
+    }
+
+    /// Covers and anything else that isn't music.
+    pub fn other_count(&self) -> usize {
+        // The two counts come from two walks; files deleted in between could
+        // make the music outnumber them.
+        self.files.saturating_sub(self.music_count())
+    }
+}
+
+/// Which music in the Staging folder is on the Server, as a Compare with
+/// Server found it, or as a successful Upload left it.
+#[derive(Debug, Clone)]
+pub struct Comparison {
+    folder: PathBuf,
+    /// The music files in the Staging folder at the time. A file that came
+    /// later, from a Download or by hand, isn't known to be on the Server.
+    music_then: BTreeSet<PathBuf>,
+    /// What an Upload would have sent then.
+    to_send: BTreeSet<PathBuf>,
+    pub at: Instant,
+}
+
+impl Comparison {
+    /// `to_send` is what rsync listed, relative to `folder`; empty after an
+    /// Upload that worked.
+    pub fn new(folder: &Path, contents: &StagingContents, to_send: &[PathBuf]) -> Self {
+        Self {
+            folder: folder.to_owned(),
+            music_then: contents.music_files().map(Path::to_path_buf).collect(),
+            to_send: to_send.iter().cloned().collect(),
+            at: Instant::now(),
+        }
+    }
+
+    /// A comparison of another Staging folder says nothing about this one.
+    pub fn is_for(&self, folder: &Path) -> bool {
+        self.folder == folder
+    }
+
+    pub fn is_uploaded(&self, file: &Path) -> bool {
+        self.music_then.contains(file) && !self.to_send.contains(file)
+    }
+
+    /// How many of `files` an Upload would still send.
+    pub fn to_upload<'a>(&self, files: impl IntoIterator<Item = &'a Path>) -> usize {
+        files
+            .into_iter()
+            .filter(|file| !self.is_uploaded(file))
+            .count()
+    }
+}
+
 /// The music files in `folder`, grouped by the folder they sit in. That's
 /// the album or playlist whatever the folder Naming template or streamrip's
 /// options make of the layout. Sorted by folder, single tracks last.
@@ -67,11 +151,16 @@ pub fn music_groups(folder: &Path) -> Result<Vec<MusicGroup>, StagingError> {
     Ok(groups)
 }
 
-/// The folder `file` sits in, or the one above if that's a disc folder.
+/// The folder `file` sits in, or the one above if that's a disc folder
+/// inside an album. A disc folder directly in the Staging folder is a group
+/// of its own, not single tracks.
 fn album_folder(file: &Path) -> PathBuf {
     let parent = file.parent().unwrap_or(Path::new(""));
-    match parent.file_name().and_then(|name| name.to_str()) {
-        Some(name) if is_disc_folder(name) => parent.parent().unwrap_or(Path::new("")),
+    let album = parent
+        .parent()
+        .filter(|album| !album.as_os_str().is_empty());
+    match (parent.file_name().and_then(|name| name.to_str()), album) {
+        (Some(name), Some(album)) if is_disc_folder(name) => album,
         _ => parent,
     }
     .to_path_buf()
@@ -256,6 +345,35 @@ mod tests {
                 group(Some("Discovery"), &["Discovery/01. One More Time.flac"]),
             ]
         );
+    }
+
+    #[test]
+    fn a_disc_folder_with_no_album_above_it_is_its_own_group() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("Disc 1")).unwrap();
+        fs::write(dir.path().join("Disc 1/01.flac"), "x").unwrap();
+
+        assert_eq!(
+            music_groups(dir.path()).unwrap(),
+            [group(Some("Disc 1"), &["Disc 1/01.flac"])]
+        );
+    }
+
+    #[test]
+    fn a_comparison_counts_what_rsync_would_send_and_what_came_since() {
+        let dir = staging();
+        let contents = StagingContents::read(dir.path()).unwrap();
+        let comparison = Comparison::new(dir.path(), &contents, &[PathBuf::from("album/02.flac")]);
+        fs::write(dir.path().join("album/03.flac"), "x").unwrap();
+        let now = StagingContents::read(dir.path()).unwrap();
+
+        assert_eq!(now.music_count(), 4);
+        assert_eq!(now.other_count(), 1, "the cover");
+        assert_eq!(comparison.to_upload(now.music_files()), 2, "02 and 03");
+        assert!(comparison.is_uploaded(Path::new("album/01.flac")));
+        assert!(comparison.is_uploaded(Path::new("loose.mp3")));
+        assert!(comparison.is_for(dir.path()));
+        assert!(!comparison.is_for(Path::new("/elsewhere")));
     }
 
     #[test]

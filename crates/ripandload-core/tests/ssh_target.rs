@@ -146,6 +146,8 @@ fn upload_copies_staging_once_and_never_deletes() {
     let (job, log) = upload(staging.path());
     assert!(job.succeeded(), "{log:#?}");
     assert_eq!(job.status(), "Upload finished");
+    assert!(job.upload_succeeded());
+    assert_eq!(job.to_send(), Some(&[][..]), "everything went");
     assert!(
         log.iter()
             .any(|line| line == "Artist - Album (2024)/01. Song.flac"),
@@ -195,4 +197,20 @@ fn compare_lists_only_what_the_server_lacks_and_sends_nothing() {
         ]
     );
     assert!(!music.join("Björk - Debut (1993)").exists());
+}
+
+#[test]
+#[ignore = "needs dev/ssh-target.sh"]
+fn a_failed_upload_says_nothing_about_the_server() {
+    let staging = tempfile::tempdir().unwrap();
+    fs::write(staging.path().join("01.flac"), "x").unwrap();
+    let mut server = server();
+    server.port = 2223;
+
+    let mut log = Vec::new();
+    let job = JobRun::upload(native(), staging.path(), &server, &mut log);
+    let (job, log) = run_to_end(job, log);
+
+    assert!(!job.succeeded(), "{log:#?}");
+    assert_eq!(job.to_send(), None);
 }

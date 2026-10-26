@@ -1,104 +1,51 @@
 //! The Upload tab: where the Staging folder goes, what's in it, and what of
 //! that is already on the Server.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use ripandload_core::error::error_chain;
 use ripandload_core::settings::Server;
-use ripandload_core::staging::{self, MusicGroup};
+use ripandload_core::staging::{Comparison, MusicGroup, StagingContents};
 
 /// How often to rescan the Staging folder while the Upload tab is open.
 const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 
-/// What's in the Staging folder, rescanned now and then rather than every frame.
+/// What's in the Staging folder, read again now and then rather than every frame.
 #[derive(Debug, Default)]
 pub struct StagingScan {
-    last: Option<Scanned>,
+    last: Option<LastScan>,
 }
 
 #[derive(Debug)]
-struct Scanned {
+struct LastScan {
     folder: PathBuf,
     at: Instant,
-    scan: Result<Scan, String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Scan {
-    pub groups: Vec<MusicGroup>,
-    /// Every file, music or not.
-    pub files: usize,
-}
-
-impl Scan {
-    pub fn read(folder: &Path) -> Result<Self, String> {
-        let groups = staging::music_groups(folder).map_err(|err| error_chain(&err))?;
-        let files = staging::count_files(folder).map_err(|err| error_chain(&err))?;
-        Ok(Self { groups, files })
-    }
-
-    pub fn music_files(&self) -> impl Iterator<Item = &PathBuf> {
-        self.groups.iter().flat_map(|group| &group.files)
-    }
+    contents: Result<StagingContents, String>,
 }
 
 impl StagingScan {
-    /// The scan of `folder`, rescanning if it's stale or for another folder.
-    pub fn get(&mut self, folder: &Path) -> Result<&Scan, &str> {
+    /// What's in `folder`, read again if the last read is stale or of another folder.
+    pub fn get(&mut self, folder: &Path) -> Result<&StagingContents, &str> {
         let fresh = self
             .last
             .as_ref()
             .is_some_and(|last| last.folder == folder && last.at.elapsed() < RESCAN_INTERVAL);
         if !fresh {
-            self.last = Some(Scanned {
+            self.last = Some(LastScan {
                 folder: folder.to_owned(),
                 at: Instant::now(),
-                scan: Scan::read(folder),
+                contents: StagingContents::read(folder).map_err(|err| error_chain(&err)),
             });
         }
-        self.last
-            .as_ref()
-            .expect("set above")
-            .scan
-            .as_ref()
-            .map_err(String::as_str)
+        let last = self.last.as_ref().expect("set above");
+        last.contents.as_ref().map_err(String::as_str)
     }
 
     /// Forgets the scan, e.g. after a Download, an Upload or a Clear.
     pub fn invalidate(&mut self) {
         self.last = None;
-    }
-}
-
-/// What a Compare with Server found, or what a successful Upload implies.
-#[derive(Debug)]
-pub struct Comparison {
-    folder: PathBuf,
-    /// The music files in the Staging folder at the time. Any file that came
-    /// later, from a Download or by hand, isn't known to be on the Server.
-    known: BTreeSet<PathBuf>,
-    /// What an Upload would have sent then.
-    to_send: BTreeSet<PathBuf>,
-    at: Instant,
-}
-
-impl Comparison {
-    /// `to_send` as rsync listed it, relative to `folder`.
-    pub fn new(folder: &Path, to_send: &[PathBuf]) -> Result<Self, String> {
-        let scan = Scan::read(folder)?;
-        Ok(Self {
-            folder: folder.to_owned(),
-            known: scan.music_files().cloned().collect(),
-            to_send: to_send.iter().cloned().collect(),
-            at: Instant::now(),
-        })
-    }
-
-    fn is_uploaded(&self, file: &Path) -> bool {
-        self.known.contains(file) && !self.to_send.contains(file)
     }
 }
 
@@ -120,9 +67,8 @@ pub fn show(
     job_running: bool,
 ) -> Action {
     let server_ready = server.is_some_and(Server::is_set_up);
-    let scan = scan.get(staging_folder);
-    // A comparison of another Staging folder says nothing about this one.
-    let comparison = comparison.filter(|comparison| comparison.folder == staging_folder);
+    let contents = scan.get(staging_folder);
+    let comparison = comparison.filter(|comparison| comparison.is_for(staging_folder));
 
     egui::Grid::new("upload")
         .num_columns(2)
@@ -143,22 +89,19 @@ pub fn show(
             ui.end_row();
 
             ui.label("Music files");
-            match scan {
-                Ok(scan) => ui.label(scan.music_files().count().to_string()),
+            match contents {
+                Ok(contents) => ui.label(contents.music_count().to_string()),
                 Err(err) => ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {err}")),
             };
             ui.end_row();
 
             ui.label("On the Server");
-            match (scan, comparison) {
-                (Ok(scan), Some(comparison)) => {
-                    let (uploaded, to_upload): (Vec<_>, Vec<_>) = scan
-                        .music_files()
-                        .partition(|file| comparison.is_uploaded(file));
+            match (contents, comparison) {
+                (Ok(contents), Some(comparison)) => {
+                    let to_upload = comparison.to_upload(contents.music_files());
                     ui.label(format!(
-                        "{} to upload · {} already on the Server (compared {})",
-                        to_upload.len(),
-                        uploaded.len(),
+                        "{to_upload} to upload · {} already on the Server (compared {})",
+                        contents.music_count() - to_upload,
                         ago(comparison.at)
                     ))
                 }
@@ -205,11 +148,11 @@ pub fn show(
         }
     });
 
-    if let Ok(scan) = scan
-        && !scan.groups.is_empty()
+    if let Ok(contents) = contents
+        && !contents.groups.is_empty()
     {
         ui.add_space(8.0);
-        groups(ui, &scan.groups, comparison);
+        groups(ui, &contents.groups, comparison);
     }
     action
 }
@@ -218,11 +161,7 @@ pub fn show(
 /// to upload first.
 fn groups(ui: &mut egui::Ui, groups: &[MusicGroup], comparison: Option<&Comparison>) {
     let to_upload = |group: &MusicGroup| match comparison {
-        Some(comparison) => group
-            .files
-            .iter()
-            .filter(|file| !comparison.is_uploaded(file))
-            .count(),
+        Some(comparison) => comparison.to_upload(group.files.iter().map(PathBuf::as_path)),
         None => 0,
     };
     let mut rows: Vec<_> = groups

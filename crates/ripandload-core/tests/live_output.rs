@@ -61,3 +61,42 @@ fn a_cancelled_download_leaves_no_progress_behind() {
     assert!(!output.finish().iter().any(|line| line.contains('%')));
     assert!(output.live_rows().is_empty());
 }
+
+/// Recorded like `rich13-progress.out`, with RichHandler's time and path
+/// columns off: one track finishes, so only the "Downloading" row is left,
+/// and an error is logged while the display is that one row high. A one-row
+/// redraw doesn't move the cursor up; it only goes back to the row's start.
+const ONE_ROW: &[u8] = include_bytes!("fixtures/rich13-one-row.out");
+
+#[test]
+fn a_line_logged_while_the_display_is_one_row_reaches_the_log() {
+    let mut output = LiveOutput::default();
+    let mut lines = Vec::new();
+    for chunk in ONE_ROW.chunks(5) {
+        lines.extend(output.feed(chunk));
+    }
+    lines.extend(output.finish());
+
+    assert_eq!(
+        lines,
+        [
+            "ERROR    Track 02 not available for stream on qobuz",
+            "INFO     Finished",
+        ]
+    );
+}
+
+#[test]
+fn an_escape_sequence_that_never_ends_doesnt_swallow_the_rest() {
+    let mut input = b"\x1b]8;".to_vec();
+    input.extend(std::iter::repeat_n(b'x', 10_000));
+    input.extend(b"\nhello\n");
+
+    let mut output = LiveOutput::default();
+    let mut lines = Vec::new();
+    for chunk in input.chunks(1000) {
+        lines.extend(output.feed(chunk));
+    }
+
+    assert_eq!(lines.last().map(String::as_str), Some("hello"));
+}

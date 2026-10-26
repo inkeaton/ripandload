@@ -22,8 +22,19 @@ pub enum JobEvent {
     /// One line of stdout or stderr, without its line ending.
     Line(String),
     /// From `Job::spawn_raw`: the next bytes of stdout or stderr, as they came.
-    Output(Vec<u8>),
+    Output {
+        stream: Stream,
+        bytes: Vec<u8>,
+    },
     Finished(Outcome),
+}
+
+/// Where `JobEvent::Output` came from. Each is a separate stream of bytes,
+/// so a chunk of one can land in the middle of a line of the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    Stdout,
+    Stderr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,11 +90,11 @@ impl Job {
             child
                 .stdout
                 .take()
-                .map(|out| forward(Box::new(out), sender.clone())),
+                .map(|out| forward(Box::new(out), Stream::Stdout, sender.clone())),
             child
                 .stderr
                 .take()
-                .map(|err| forward(Box::new(err), sender.clone())),
+                .map(|err| forward(Box::new(err), Stream::Stderr, sender.clone())),
         ]
         .into_iter()
         .flatten()
@@ -127,10 +138,14 @@ impl Drop for Job {
 }
 
 /// Starts a thread that sends what a stream of the process says.
-type Forward = fn(Box<dyn Read + Send>, Sender<JobEvent>) -> JoinHandle<()>;
+type Forward = fn(Box<dyn Read + Send>, Stream, Sender<JobEvent>) -> JoinHandle<()>;
 
 /// Sends each line of `stream` until it closes or nobody is listening.
-fn forward_lines(stream: Box<dyn Read + Send>, sender: Sender<JobEvent>) -> JoinHandle<()> {
+fn forward_lines(
+    stream: Box<dyn Read + Send>,
+    _: Stream,
+    sender: Sender<JobEvent>,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         // `split` instead of `lines`: a byte that isn't UTF-8 becomes `�`
         // instead of ending the stream with an error.
@@ -153,17 +168,19 @@ fn forward_lines(stream: Box<dyn Read + Send>, sender: Sender<JobEvent>) -> Join
 
 /// Sends whatever `stream` has, as soon as it has it, until it closes or
 /// nobody is listening.
-fn forward_chunks(mut stream: Box<dyn Read + Send>, sender: Sender<JobEvent>) -> JoinHandle<()> {
+fn forward_chunks(
+    mut reader: Box<dyn Read + Send>,
+    stream: Stream,
+    sender: Sender<JobEvent>,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0; 4096];
         loop {
-            match stream.read(&mut buffer) {
+            match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
-                    if sender
-                        .send(JobEvent::Output(buffer[..read].to_vec()))
-                        .is_err()
-                    {
+                    let bytes = buffer[..read].to_vec();
+                    if sender.send(JobEvent::Output { stream, bytes }).is_err() {
                         break;
                     }
                 }

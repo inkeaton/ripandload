@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use ripandload_core::error::JobError;
-use ripandload_core::job::{Job, JobEvent, Outcome};
+use ripandload_core::job::{Job, JobEvent, Outcome, Stream};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -28,26 +28,34 @@ fn run_to_end(job: &Job) -> (Vec<String>, Outcome) {
     loop {
         match job.events().recv_timeout(TIMEOUT).expect("job hung") {
             JobEvent::Line(line) => lines.push(line),
-            JobEvent::Output(_) => panic!("Job::spawn sends lines"),
+            JobEvent::Output { .. } => panic!("Job::spawn sends lines"),
             JobEvent::Finished(outcome) => return (lines, outcome),
         }
     }
 }
 
 #[test]
-fn raw_output_arrives_without_waiting_for_a_newline() {
+fn raw_output_arrives_without_waiting_for_a_newline_and_says_which_stream() {
     // A progress bar redraws with `\r` and doesn't end its line.
     let mut command = Command::new("sh");
     command
-        .args(["-c", "printf '10%%'; sleep 0.3; printf '\\r20%%'; sleep 5"])
+        .args([
+            "-c",
+            "printf '10%%'; sleep 0.3; printf 'oops' >&2; sleep 0.3; printf '\\r20%%'; sleep 5",
+        ])
         .stdin(Stdio::null())
-        .stdout(Stdio::piped());
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let job = Job::spawn_raw(command).unwrap();
 
-    let first = job.events().recv_timeout(TIMEOUT).expect("job hung");
-    assert_eq!(first, JobEvent::Output(b"10%".to_vec()));
-    let second = job.events().recv_timeout(TIMEOUT).expect("job hung");
-    assert_eq!(second, JobEvent::Output(b"\r20%".to_vec()));
+    let next = || job.events().recv_timeout(TIMEOUT).expect("job hung");
+    let output = |stream, bytes: &[u8]| JobEvent::Output {
+        stream,
+        bytes: bytes.to_vec(),
+    };
+    assert_eq!(next(), output(Stream::Stdout, b"10%"));
+    assert_eq!(next(), output(Stream::Stderr, b"oops"));
+    assert_eq!(next(), output(Stream::Stdout, b"\r20%"));
     job.cancel();
 }
 

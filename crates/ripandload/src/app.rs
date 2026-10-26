@@ -6,13 +6,13 @@ use ripandload_core::command;
 use ripandload_core::error::error_chain;
 use ripandload_core::job_run::JobRun;
 use ripandload_core::settings::Settings;
-use ripandload_core::staging;
+use ripandload_core::staging::{self, Comparison, StagingContents};
 use ripandload_core::streamrip_config::{self, Seeded};
 use ripandload_core::tool_env::ToolEnv;
 
 use crate::download_tab::{self, DownloadForm};
 use crate::settings_tab;
-use crate::upload_tab::{self, Comparison, Scan, StagingScan, plural};
+use crate::upload_tab::{self, StagingScan, plural};
 
 /// How often to check on a running job for new output.
 const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -61,8 +61,6 @@ pub struct RipAndLoadApp {
     staging_scan: StagingScan,
     /// The last Compare with Server, or the last successful Upload.
     comparison: Option<Comparison>,
-    /// The current job is an Upload: if it works, everything is on the Server.
-    uploading: bool,
     /// The "clear Staging folder?" dialog is open.
     confirming_clear: Option<ClearPrompt>,
     /// What the Settings tab is editing.
@@ -104,7 +102,6 @@ impl RipAndLoadApp {
             download: DownloadForm::default(),
             staging_scan: StagingScan::default(),
             comparison: None,
-            uploading: false,
             confirming_clear: None,
             saved_settings: settings.clone(),
             settings,
@@ -192,7 +189,6 @@ impl RipAndLoadApp {
             &mut self.log,
         );
         self.start_job(job);
-        self.uploading = true;
     }
 
     fn test_connection(&mut self) {
@@ -227,21 +223,20 @@ impl RipAndLoadApp {
 
     /// Asks before clearing, showing how many files would go.
     fn ask_to_clear(&mut self, after_upload: bool) {
-        match Scan::read(&self.settings.staging_folder) {
-            Ok(scan) if scan.files == 0 => {
+        match StagingContents::read(&self.settings.staging_folder) {
+            Ok(contents) if contents.is_empty() => {
                 if !after_upload {
                     self.status = "The Staging folder is already empty.".into();
                 }
             }
-            Ok(scan) => {
-                let music = scan.music_files().count();
+            Ok(contents) => {
                 self.confirming_clear = Some(ClearPrompt {
-                    music,
-                    other: scan.files - music,
+                    music: contents.music_count(),
+                    other: contents.other_count(),
                     after_upload,
                 });
             }
-            Err(err) => self.status = err,
+            Err(err) => self.status = error_chain(&err),
         }
     }
 
@@ -260,7 +255,12 @@ impl RipAndLoadApp {
 
     fn start_job(&mut self, job: JobRun) {
         self.status = job.status();
+        let finished = job.is_finished();
         self.job = Some(job);
+        // One that couldn't start is over already; `poll_job` won't see it end.
+        if finished {
+            self.job_finished();
+        }
     }
 
     fn cancel_job(&mut self) {
@@ -284,22 +284,24 @@ impl RipAndLoadApp {
             ctx.request_repaint_after(JOB_POLL_INTERVAL);
             return;
         }
+        self.job_finished();
+    }
+
+    /// Once per job, when it ends.
+    fn job_finished(&mut self) {
         // Downloads and Uploads change what's in the Staging folder.
         self.staging_scan.invalidate();
-        let upload_worked = std::mem::take(&mut self.uploading) && job.succeeded();
-        // An Upload that worked sent everything, so there's nothing to ask the Server.
-        let to_send = if upload_worked {
-            Some(&[][..])
-        } else {
-            job.to_send()
+        let Some(job) = &self.job else {
+            return;
         };
-        if let Some(to_send) = to_send {
-            match Comparison::new(&self.settings.staging_folder, to_send) {
-                Ok(comparison) => self.comparison = Some(comparison),
-                Err(err) => self.status = err,
+        let folder = &self.settings.staging_folder;
+        if let Some(to_send) = job.to_send() {
+            match StagingContents::read(folder) {
+                Ok(contents) => self.comparison = Some(Comparison::new(folder, &contents, to_send)),
+                Err(err) => self.status = error_chain(&err),
             }
         }
-        if upload_worked && self.settings.offer_clear_after_upload {
+        if job.upload_succeeded() && self.settings.offer_clear_after_upload {
             self.ask_to_clear(true);
         }
     }

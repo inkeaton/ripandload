@@ -8,7 +8,7 @@ use std::sync::mpsc::TryRecvError;
 
 use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
 use crate::error::{ToolError, error_chain};
-use crate::job::{Job, JobEvent, Outcome};
+use crate::job::{Job, JobEvent, Outcome, Stream};
 use crate::live_output::LiveOutput;
 use crate::settings::Server;
 use crate::tool_env::ToolEnv;
@@ -52,6 +52,24 @@ const SSH_FAILED: i32 = 255;
 /// The shell's exit code when the program doesn't exist (inside WSL).
 const SHELL_NOT_FOUND: i32 = 127;
 
+/// `rip`'s stdout and stderr, read apart so neither lands in the middle of
+/// a line of the other. rich draws on stdout; stderr is only Python's own
+/// complaints.
+#[derive(Debug, Default)]
+struct RipOutput {
+    stdout: LiveOutput,
+    stderr: LiveOutput,
+}
+
+impl RipOutput {
+    fn of(&mut self, stream: Stream) -> &mut LiveOutput {
+        match stream {
+            Stream::Stdout => &mut self.stdout,
+            Stream::Stderr => &mut self.stderr,
+        }
+    }
+}
+
 pub struct JobRun {
     kind: Kind,
     tool_env: ToolEnv,
@@ -63,7 +81,7 @@ pub struct JobRun {
     /// the Staging folder.
     to_send: Vec<PathBuf>,
     /// While `rip` downloads: its output, progress bars and all.
-    live: Option<LiveOutput>,
+    live: Option<RipOutput>,
     problems: usize,
     cancelled: bool,
 }
@@ -190,16 +208,18 @@ impl JobRun {
             };
             match event {
                 JobEvent::Line(line) => self.on_line(line, log),
-                JobEvent::Output(bytes) => {
-                    let lines = self.live.as_mut().map(|live| live.feed(&bytes));
+                JobEvent::Output { stream, bytes } => {
+                    let lines = self.live.as_mut().map(|live| live.of(stream).feed(&bytes));
                     for line in lines.into_iter().flatten() {
                         self.on_line(line, log);
                     }
                 }
                 JobEvent::Finished(outcome) => {
-                    if let Some(mut live) = self.live.take() {
-                        for line in live.finish() {
-                            self.on_line(line, log);
+                    if let Some(live) = self.live.take() {
+                        for mut output in [live.stdout, live.stderr] {
+                            for line in output.finish() {
+                                self.on_line(line, log);
+                            }
                         }
                     }
                     self.on_finished(outcome, log);
@@ -208,17 +228,24 @@ impl JobRun {
         }
     }
 
-    /// After a Compare with Server that worked: the files an Upload would
-    /// send, relative to the Staging folder.
+    /// An Upload that finished and worked: everything is on the Server now.
+    pub fn upload_succeeded(&self) -> bool {
+        self.kind == Kind::Upload && self.succeeded()
+    }
+
+    /// After a Compare with Server or an Upload that worked: the files an
+    /// Upload would send, relative to the Staging folder. Empty after an
+    /// Upload, which sent them all.
     pub fn to_send(&self) -> Option<&[PathBuf]> {
-        (self.kind == Kind::Compare && self.succeeded()).then_some(&self.to_send)
+        let knows = matches!(self.kind, Kind::Compare | Kind::Upload) && self.succeeded();
+        knows.then_some(&self.to_send)
     }
 
     /// rip's progress bars while a Download runs, one string per row.
     pub fn live_rows(&self) -> Vec<String> {
         self.live
             .as_ref()
-            .map(LiveOutput::live_rows)
+            .map(|live| live.stdout.live_rows())
             .unwrap_or_default()
     }
 
@@ -359,7 +386,7 @@ impl JobRun {
                 .and_then(|command| spawn(command).map_err(|err| error_chain(&err)));
             match job {
                 Ok(job) => {
-                    self.live = raw.then(LiveOutput::default);
+                    self.live = raw.then(RipOutput::default);
                     self.current = Some((spec, job));
                     return;
                 }

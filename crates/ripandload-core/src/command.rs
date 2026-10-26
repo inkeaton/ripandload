@@ -136,11 +136,11 @@ pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
 /// Upload would send, one `itemized_file` line each. `--8-bit-output` keeps
 /// names like "Björk" readable when rsync runs in the C locale, as in WSL.
 pub fn compare_spec(staging: &Path, server: &Server) -> CommandSpec {
-    let mut args = rsync_args(server, staging);
-    args.splice(
-        3..3,
-        ["--dry-run", "--itemize-changes", "--8-bit-output"].map(String::from),
-    );
+    // Options go first, so the Upload's own arguments stay as they are.
+    let mut args: Vec<String> = ["--dry-run", "--itemize-changes", "--8-bit-output"]
+        .map(String::from)
+        .into();
+    args.extend(rsync_args(server, staging));
     CommandSpec {
         program: Tool::Rsync,
         args,
@@ -383,12 +383,11 @@ mod tests {
         let compare = compare_spec(staging, &server());
 
         assert_eq!(compare.program, Tool::Rsync);
-        assert_eq!(compare.args[..3], upload.args[..3]);
         assert_eq!(
-            compare.args[3..6],
+            compare.args[..3],
             ["--dry-run", "--itemize-changes", "--8-bit-output"]
         );
-        assert_eq!(compare.args[6..], upload.args[3..]);
+        assert_eq!(compare.args[3..], upload.args);
     }
 
     #[test]

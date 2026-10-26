@@ -1,18 +1,22 @@
 //! A Download's output, as a terminal would show it.
 //!
 //! streamrip draws its progress bars with rich's `Live` display: it hides the
-//! cursor, draws a few rows, and ten times a second moves the cursor back up
-//! over them (`ESC[1A`), clears each (`ESC[2K`) and draws them again. A log
-//! message is printed the same way, in place of the bars, with the bars drawn
-//! again below it. So a row above where the last redraw started writing will
-//! never change again: that's a finished line for the log. The rows from there down are
-//! the live rows, and when the cursor shows again (`ESC[?25h`) the display is
-//! over and they're dropped, so progress never reaches the log.
+//! cursor, draws a few rows, and ten times a second goes back to the start
+//! of the row (`\r`), moves the cursor up over the others (`ESC[1A`), clears
+//! each (`ESC[2K`) and draws them again. A log message is printed the same
+//! way, in place of the bars, with the bars drawn again below it. So a row
+//! above where the last redraw started writing will never change again:
+//! that's a finished line for the log. The rows from there down are the live
+//! rows, and when the cursor shows again (`ESC[?25h`) the display is over and
+//! they're dropped, so progress never reaches the log.
 //!
 //! Only what rich writes is understood: those three sequences, `\r` and `\n`.
 //! Colours, hyperlinks and anything else are skipped.
 
 const ESC: u8 = 0x1b;
+
+/// Longer than any escape sequence rich writes; a hyperlink is a few hundred bytes.
+const MAX_PENDING: usize = 4096;
 
 #[derive(Debug, Default)]
 pub struct LiveOutput {
@@ -23,9 +27,10 @@ pub struct LiveOutput {
     col: usize,
     /// While the Live display is on: the row it starts at.
     live_top: Option<usize>,
-    /// The cursor moved up, and the redraw hasn't written anything yet. Until
-    /// it does, a chunk may have ended partway up, so `live_top` stays put.
-    moving_up: bool,
+    /// A redraw began (`\r`, then the cursor going up over the old rows) and
+    /// hasn't written anything yet. Until it does, a chunk may have ended
+    /// partway up, so `live_top` stays put.
+    redrawing: bool,
     /// The start of an escape sequence or character the last chunk cut off.
     pending: Vec<u8>,
 }
@@ -50,9 +55,17 @@ impl LiveOutput {
         input.extend_from_slice(bytes);
 
         let mut at = 0;
-        while let Some((token, len)) = next_token(&input[at..]) {
-            at += len;
-            self.apply(token);
+        while at < input.len() {
+            match next_token(&input[at..]) {
+                Some((token, len)) => {
+                    at += len;
+                    self.apply(token);
+                }
+                // No escape sequence is this long: this one never ends, so
+                // skip its ESC and read on.
+                None if input.len() - at > MAX_PENDING => at += 1,
+                None => break,
+            }
         }
         self.pending = input[at..].to_vec();
         self.take_finished()
@@ -90,7 +103,12 @@ impl LiveOutput {
                 self.row += 1;
                 self.col = 0;
             }
-            Token::Char('\r') => self.col = 0,
+            Token::Char('\r') => {
+                self.col = 0;
+                // Every redraw starts here, including a one-row display's,
+                // which doesn't move the cursor up at all.
+                self.redrawing = true;
+            }
             Token::Char('\t') => {
                 for _ in 0..8 - self.col % 8 {
                     self.put(' ');
@@ -110,7 +128,7 @@ impl LiveOutput {
             (_, 'A') => {
                 let up = params.parse().unwrap_or(1).max(1);
                 self.row = self.row.saturating_sub(up);
-                self.moving_up = true;
+                self.redrawing = true;
             }
             (_, 'K') => {
                 let col = self.col;
@@ -134,7 +152,7 @@ impl LiveOutput {
     }
 
     fn put(&mut self, c: char) {
-        if std::mem::take(&mut self.moving_up) && self.live_top.is_some() {
+        if std::mem::take(&mut self.redrawing) && self.live_top.is_some() {
             self.live_top = Some(self.row);
         }
         let col = self.col;

@@ -40,6 +40,18 @@ _Avoid_: Remote, host, laptop, NAS
 One push of the whole Staging folder to a Server's music folder.
 _Avoid_: Sync, transfer, deploy
 
+**Music file**:
+An audio file in the Staging folder, told apart by its extension. Covers, lyrics and cue sheets aren't music files, though Uploads still send them.
+_Avoid_: Song, audio
+
+**Album folder**:
+The folder that directly holds a group of music files: an album or a playlist, with any disc folders inside it. Music files directly in the Staging folder are the single tracks.
+_Avoid_: Release, collection
+
+**Comparison**:
+What a Compare with Server found: which music files the Server already has and which an Upload would send. A successful Upload leaves one where the Server has everything.
+_Avoid_: Sync status, diff
+
 ### The app
 
 **Settings**:
