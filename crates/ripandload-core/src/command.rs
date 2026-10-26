@@ -2,6 +2,9 @@
 //! `tool_env`'s job, so the same `CommandSpec` works natively and under WSL.
 
 use std::fmt;
+use std::path::Path;
+
+use crate::settings::{Server, Settings};
 
 /// The streamrip version the app's Streamrip config is written for.
 pub const STREAMRIP_VERSION: &str = "2.2.0";
@@ -11,6 +14,7 @@ pub const STREAMRIP_VERSION: &str = "2.2.0";
 pub enum Tool {
     Rip,
     Rsync,
+    Ssh,
 }
 
 impl Tool {
@@ -19,6 +23,7 @@ impl Tool {
         match self {
             Tool::Rip => "rip",
             Tool::Rsync => "rsync",
+            Tool::Ssh => "ssh",
         }
     }
 }
@@ -80,6 +85,94 @@ pub fn download_spec(config: &str, urls: &[&str], quality: Option<u8>) -> Comman
     spec
 }
 
+/// An Upload: rsync the Staging folder's contents into the Server's music folder.
+pub fn upload_spec(settings: &Settings, server: &Server) -> CommandSpec {
+    CommandSpec {
+        program: Tool::Rsync,
+        args: rsync_args(server, &settings.staging_folder),
+        env: Vec::new(),
+    }
+}
+
+/// `-rtv --partial --chmod=D755,F644 -e "<ssh …>" <staging>/ <user>@<host>:<music folder>/`.
+///
+/// The trailing slash on `staging` copies what's inside it rather than the
+/// folder itself; the one on the music folder makes rsync treat it as a folder.
+/// There's no `--delete`: an Upload never removes anything on the Server.
+pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
+    // 🦀 Exercise (ticket 07): make the `rsync_` tests below pass.
+    // `remote_shell(server)` and `server.destination()` are ready to use.
+    let _ = (server, staging, remote_shell); // delete this line when you start
+    todo!()
+}
+
+/// The commands behind "Test connection": log in and run `true`, then check
+/// that the music folder exists and is writable.
+pub fn test_connection_specs(server: &Server) -> Vec<CommandSpec> {
+    let folder = match server.music_folder.strip_prefix("~/") {
+        // Left unquoted so the Server's shell expands it, as rsync does.
+        Some(rest) => format!("~/{}", shell_quote(rest)),
+        None => shell_quote(&server.music_folder),
+    };
+    [
+        "true".to_owned(),
+        format!("test -d {folder} && test -w {folder}"),
+    ]
+    .into_iter()
+    .map(|remote| {
+        let mut args = ssh_options(server);
+        args.extend(["--".to_owned(), server.destination(), remote]);
+        CommandSpec {
+            program: Tool::Ssh,
+            args,
+            env: Vec::new(),
+        }
+    })
+    .collect()
+}
+
+/// `-i <key> -p <port>` plus options that never stop to ask a question:
+/// a new host key is accepted, a changed one or a password prompt fails.
+/// Without a key, ssh tries its defaults and ssh-agent.
+fn ssh_options(server: &Server) -> Vec<String> {
+    let mut options = Vec::new();
+    if !server.ssh_key.as_os_str().is_empty() {
+        options.extend(["-i".to_owned(), server.ssh_key.display().to_string()]);
+    }
+    options.extend(
+        [
+            "-p",
+            &server.port.to_string(),
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "BatchMode=yes",
+        ]
+        .map(str::to_owned),
+    );
+    options
+}
+
+/// The ssh command line for rsync's `-e`. rsync splits it on spaces itself,
+/// honouring quotes, where a doubled quote stands for a literal one.
+fn remote_shell(server: &Server) -> String {
+    let mut command = String::from("ssh");
+    for option in ssh_options(server) {
+        command.push(' ');
+        if option.contains([' ', '\'', '"']) {
+            command.push_str(&format!("'{}'", option.replace('\'', "''")));
+        } else {
+            command.push_str(&option);
+        }
+    }
+    command
+}
+
+/// Quotes `text` for the Server's shell, which runs ssh's remote command.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
 /// Finds the version in `rip --version` output, e.g. `rip, version 2.2.0`.
 pub fn parse_rip_version(line: &str) -> Option<&str> {
     let (_, version) = line.trim().split_once(", version ")?;
@@ -89,6 +182,9 @@ pub fn parse_rip_version(line: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    use crate::settings::Settings;
 
     #[test]
     fn version_specs_check_rip_then_rsync() {
@@ -154,6 +250,140 @@ mod tests {
         assert_eq!(spec.program, Tool::Rip);
         assert_eq!(spec.args[1], "/a b/streamrip.toml");
         assert_eq!(spec.args[spec.args.len() - 4..], ["url", "u1", "u2", "u3"]);
+    }
+
+    fn server() -> Server {
+        Server {
+            host: "music.example.org".into(),
+            user: "fance".into(),
+            port: 21,
+            music_folder: "/srv/subsonic/Music".into(),
+            ssh_key: PathBuf::from("/home/mari/.ssh/navidrome_rsync_key"),
+        }
+    }
+
+    #[test]
+    fn rsync_copies_the_staging_contents_into_the_music_folder() {
+        let args = rsync_args(&server(), Path::new("/home/mari/Music/ripandload"));
+        assert_eq!(
+            args,
+            [
+                "-rtv",
+                "--partial",
+                "--chmod=D755,F644",
+                "-e",
+                "ssh -i /home/mari/.ssh/navidrome_rsync_key -p 21 -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
+                "/home/mari/Music/ripandload/",
+                "fance@music.example.org:/srv/subsonic/Music/",
+            ]
+        );
+    }
+
+    #[test]
+    fn rsync_paths_get_exactly_one_trailing_slash() {
+        let mut server = server();
+        server.music_folder = "/srv/music/".into();
+        let args = rsync_args(&server, Path::new("/staging/"));
+        assert_eq!(
+            args[args.len() - 2..],
+            ["/staging/", "fance@music.example.org:/srv/music/"]
+        );
+    }
+
+    #[test]
+    fn rsync_never_deletes_on_the_server() {
+        let args = rsync_args(&server(), Path::new("/staging"));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.starts_with("--del") || arg.contains("remove")),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn rsync_quotes_a_key_path_with_spaces_for_its_remote_shell() {
+        let mut server = server();
+        server.ssh_key = PathBuf::from("/home/a b/it's key");
+        let args = rsync_args(&server, Path::new("/staging"));
+        assert!(
+            args[4].starts_with("ssh -i '/home/a b/it''s key' -p 21 "),
+            "{}",
+            args[4]
+        );
+    }
+
+    #[test]
+    fn rsync_without_a_key_or_user_uses_ssh_defaults() {
+        let mut server = server();
+        server.ssh_key = PathBuf::new();
+        server.user = String::new();
+        let args = rsync_args(&server, Path::new("/staging"));
+        assert_eq!(
+            args[4],
+            "ssh -p 21 -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+        );
+        assert_eq!(args[6], "music.example.org:/srv/subsonic/Music/");
+    }
+
+    #[test]
+    fn upload_spec_runs_rsync_from_the_staging_folder() {
+        let settings = Settings {
+            staging_folder: PathBuf::from("/home/mari/Music/ripandload"),
+            ..Default::default()
+        };
+        let spec = upload_spec(&settings, &server());
+        assert_eq!(spec.program, Tool::Rsync);
+        assert_eq!(
+            spec.args[spec.args.len() - 2..],
+            [
+                "/home/mari/Music/ripandload/",
+                "fance@music.example.org:/srv/subsonic/Music/"
+            ]
+        );
+        assert!(spec.env.is_empty());
+    }
+
+    #[test]
+    fn test_connection_logs_in_then_checks_the_music_folder() {
+        let mut server = server();
+        server.music_folder = "/srv/my music".into();
+        let lines: Vec<String> = test_connection_specs(&server)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let ssh = "ssh -i /home/mari/.ssh/navidrome_rsync_key -p 21 \
+                   -o StrictHostKeyChecking=accept-new -o BatchMode=yes -- fance@music.example.org";
+        assert_eq!(
+            lines,
+            [
+                format!("{ssh} true"),
+                format!("{ssh} test -d '/srv/my music' && test -w '/srv/my music'"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_connection_passes_the_remote_check_as_one_argument() {
+        let mut server = server();
+        server.music_folder = "/it's/here".into();
+        let specs = test_connection_specs(&server);
+        assert!(specs.iter().all(|spec| spec.program == Tool::Ssh));
+        assert_eq!(
+            specs[1].args.last().unwrap(),
+            r"test -d '/it'\''s/here' && test -w '/it'\''s/here'"
+        );
+    }
+
+    #[test]
+    fn test_connection_lets_the_server_expand_a_home_folder() {
+        let mut server = server();
+        server.music_folder = "~/my music".into();
+        let specs = test_connection_specs(&server);
+        assert_eq!(
+            specs[1].args.last().unwrap(),
+            "test -d ~/'my music' && test -w ~/'my music'"
+        );
     }
 
     #[test]

@@ -156,6 +156,22 @@ impl Default for Server {
     }
 }
 
+impl Server {
+    /// Whether there's enough to Upload or Test connection: a host and a music folder.
+    pub fn is_set_up(&self) -> bool {
+        !self.host.trim().is_empty() && !self.music_folder.trim().is_empty()
+    }
+
+    /// `user@host`, or just `host` to let ssh pick the user.
+    pub fn destination(&self) -> String {
+        if self.user.is_empty() {
+            self.host.clone()
+        } else {
+            format!("{}@{}", self.user, self.host)
+        }
+    }
+}
+
 /// `~/Music/ripandload`, or `./ripandload` if the system has no Music folder.
 fn default_staging_folder() -> PathBuf {
     directories::UserDirs::new()

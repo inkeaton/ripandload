@@ -9,6 +9,7 @@ pub mod job;
 pub mod job_run;
 pub mod settings;
 pub mod source;
+pub mod staging;
 pub mod streamrip_config;
 pub mod tool_env;
 pub mod wsl_path;

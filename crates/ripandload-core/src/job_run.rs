@@ -1,5 +1,5 @@
-//! Runs Check tools or a Download: one or more commands one after another,
-//! writing into the log. The app polls it each frame; nothing here blocks.
+//! Runs Check tools, a Download, an Upload or Test connection: one or more
+//! commands one after another, writing into the log. The app polls it each frame; nothing here blocks.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::TryRecvError;
@@ -7,12 +7,15 @@ use std::sync::mpsc::TryRecvError;
 use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
 use crate::error::error_chain;
 use crate::job::{Job, JobEvent, Outcome};
+use crate::settings::Server;
 use crate::tool_env::ToolEnv;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     CheckTools,
     Download,
+    Upload,
+    TestConnection,
 }
 
 impl Kind {
@@ -21,9 +24,25 @@ impl Kind {
         match self {
             Kind::CheckTools => "Check tools",
             Kind::Download => "Download",
+            Kind::Upload => "Upload",
+            Kind::TestConnection => "Test connection",
         }
     }
+
+    /// Check tools carries on after a problem, so one missing tool doesn't
+    /// hide the others; everything else stops.
+    fn stops_at_first_problem(self) -> bool {
+        self != Kind::CheckTools
+    }
+
+    /// "Download finished" rather than "Download: all good".
+    fn says_finished(self) -> bool {
+        matches!(self, Kind::Download | Kind::Upload)
+    }
 }
+
+/// ssh's exit code when it couldn't connect or log in.
+const SSH_FAILED: i32 = 255;
 
 pub struct JobRun {
     kind: Kind,
@@ -47,6 +66,22 @@ impl JobRun {
         Self::start(Kind::Download, tool_env, vec![spec], log)
     }
 
+    /// One `rsync` run, from `command::upload_spec`.
+    pub fn upload(tool_env: ToolEnv, spec: CommandSpec, log: &mut Vec<String>) -> Self {
+        Self::start(Kind::Upload, tool_env, vec![spec], log)
+    }
+
+    /// The ssh checks from `command::test_connection_specs`, stopping at the
+    /// first one that fails.
+    pub fn test_connection(tool_env: ToolEnv, server: &Server, log: &mut Vec<String>) -> Self {
+        Self::start(
+            Kind::TestConnection,
+            tool_env,
+            command::test_connection_specs(server),
+            log,
+        )
+    }
+
     fn start(
         kind: Kind,
         tool_env: ToolEnv,
@@ -68,6 +103,11 @@ impl JobRun {
 
     pub fn is_finished(&self) -> bool {
         self.current.is_none()
+    }
+
+    /// Finished, not cancelled, and every command worked.
+    pub fn succeeded(&self) -> bool {
+        self.is_finished() && !self.cancelled && self.problems == 0
     }
 
     /// Stops the current command and skips the rest, even if the current one
@@ -103,7 +143,7 @@ impl JobRun {
         match (&self.current, self.cancelled, self.problems) {
             (Some((spec, _)), _, _) => format!("{name}: running {spec}…"),
             (None, true, _) => format!("{name} cancelled"),
-            (None, false, 0) if self.kind == Kind::Download => "Download finished".to_owned(),
+            (None, false, 0) if self.kind.says_finished() => format!("{name} finished"),
             (None, false, 0) => format!("{name}: all good"),
             (None, false, 1) => format!("{name}: 1 problem, see the log"),
             (None, false, n) => format!("{name}: {n} problems, see the log"),
@@ -131,7 +171,8 @@ impl JobRun {
             }
             Outcome::Succeeded => {}
             Outcome::Failed { code: Some(code) } => {
-                self.problem(log, format!("✗ {spec} failed with exit code {code}"));
+                let message = self.failure_message(&spec, code);
+                self.problem(log, message);
             }
             Outcome::Failed { code: None } => {
                 self.problem(log, format!("✗ {spec} ended without an exit code"));
@@ -141,6 +182,18 @@ impl JobRun {
             }
         }
         self.start_next(log);
+    }
+
+    fn failure_message(&self, spec: &CommandSpec, code: i32) -> String {
+        let failed = format!("✗ {spec} failed with exit code {code}");
+        let hint = match (self.kind, code) {
+            (Kind::TestConnection | Kind::Upload, SSH_FAILED) => {
+                "couldn't reach or log in to the Server; check its host, port, user and SSH key"
+            }
+            (Kind::TestConnection, _) => "the music folder doesn't exist or isn't writable",
+            _ => return failed,
+        };
+        format!("{failed}: {hint}")
     }
 
     fn check_rip_version(&mut self, log: &mut Vec<String>) {
@@ -162,7 +215,7 @@ impl JobRun {
     }
 
     /// Starts the next command that can be started; one that can't is logged
-    /// as a problem and skipped, so one missing tool doesn't hide the others.
+    /// as a problem.
     fn start_next(&mut self, log: &mut Vec<String>) {
         while let Some(spec) = self.queue.pop_front() {
             log.push(format!("$ {spec}"));
@@ -185,5 +238,8 @@ impl JobRun {
         tracing::warn!("{message}");
         log.push(message);
         self.problems += 1;
+        if self.kind.stops_at_first_problem() {
+            self.queue.clear();
+        }
     }
 }

@@ -92,6 +92,27 @@ pub enum StreamripConfigError {
     SeedFailed { path: PathBuf, output: String },
 }
 
+/// Why the Staging folder couldn't be counted or cleared.
+#[derive(Debug, thiserror::Error)]
+pub enum StagingError {
+    #[error("couldn't read {path}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("couldn't delete {path}")]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("won't clear {path}: it looks like the wrong Staging folder")]
+    Refused { path: PathBuf },
+}
+
 /// "outer error: inner cause: …", since `Display` shows only the outer message.
 pub fn error_chain(err: &dyn std::error::Error) -> String {
     let mut text = err.to_string();

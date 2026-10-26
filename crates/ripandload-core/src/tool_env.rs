@@ -68,6 +68,7 @@ fn resolve(
     let hint = match tool {
         Tool::Rip => "install streamrip or set its path in Settings",
         Tool::Rsync => "install rsync",
+        Tool::Ssh => "install OpenSSH",
     };
     which::which_in(tool.name(), search_path, cwd).map_err(|source| ToolError::NotFound {
         tool: tool.name(),

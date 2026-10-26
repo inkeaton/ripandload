@@ -4,6 +4,7 @@
 mod app;
 mod download_tab;
 mod settings_tab;
+mod upload_tab;
 
 fn main() -> eframe::Result {
     tracing_subscriber::fmt()

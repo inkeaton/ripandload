@@ -6,14 +6,18 @@ use ripandload_core::command;
 use ripandload_core::error::error_chain;
 use ripandload_core::job_run::JobRun;
 use ripandload_core::settings::Settings;
+use ripandload_core::staging;
 use ripandload_core::streamrip_config::{self, Seeded};
 use ripandload_core::tool_env::ToolEnv;
 
 use crate::download_tab::{self, DownloadForm};
 use crate::settings_tab;
+use crate::upload_tab::{self, StagingCount};
 
 /// How often to check on a running job for new output.
 const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+const NO_SERVER: &str = "No Server configured.";
 
 /// The three screens of the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -44,6 +48,11 @@ pub struct RipAndLoadApp {
     /// The current or last job. Only one runs at a time.
     job: Option<JobRun>,
     download: DownloadForm,
+    staging_count: StagingCount,
+    /// The current job is an Upload; offer to clear the Staging folder if it works.
+    offer_clear_after_job: bool,
+    /// The "clear Staging folder?" dialog is open, for this many files.
+    confirming_clear: Option<usize>,
     /// What the Settings tab is editing.
     settings: Settings,
     /// What's on disk, to tell whether there are unsaved changes.
@@ -81,6 +90,9 @@ impl RipAndLoadApp {
             status,
             job: None,
             download: DownloadForm::default(),
+            staging_count: StagingCount::default(),
+            offer_clear_after_job: false,
+            confirming_clear: None,
             saved_settings: settings.clone(),
             settings,
             settings_path,
@@ -101,8 +113,7 @@ impl RipAndLoadApp {
     fn check_tools(&mut self) {
         self.log.clear();
         let job = JobRun::check_tools(ToolEnv::from_settings(&self.settings), &mut self.log);
-        self.status = job.status();
-        self.job = Some(job);
+        self.start_job(job);
     }
 
     /// Renders the Streamrip config from the Settings as edited, then starts `rip`.
@@ -142,6 +153,59 @@ impl RipAndLoadApp {
             self.download.quality,
         );
         let job = JobRun::download(tool_env, spec, &mut self.log);
+        self.start_job(job);
+    }
+
+    /// rsyncs the Staging folder to the Server, with the Settings as edited.
+    fn upload(&mut self) {
+        self.log.clear();
+        let Some(server) = self.settings.active_server() else {
+            self.status = NO_SERVER.into();
+            return;
+        };
+        let spec = command::upload_spec(&self.settings, server);
+        let job = JobRun::upload(ToolEnv::from_settings(&self.settings), spec, &mut self.log);
+        self.start_job(job);
+        self.offer_clear_after_job = true;
+    }
+
+    fn test_connection(&mut self) {
+        self.log.clear();
+        let Some(server) = self.settings.active_server() else {
+            self.status = NO_SERVER.into();
+            return;
+        };
+        let job = JobRun::test_connection(
+            ToolEnv::from_settings(&self.settings),
+            server,
+            &mut self.log,
+        );
+        self.start_job(job);
+    }
+
+    /// Asks before clearing, showing how many files would go.
+    fn ask_to_clear(&mut self) {
+        match staging::count_files(&self.settings.staging_folder) {
+            Ok(0) => self.status = "The Staging folder is already empty.".into(),
+            Ok(files) => self.confirming_clear = Some(files),
+            Err(err) => self.status = error_chain(&err),
+        }
+    }
+
+    fn clear_staging(&mut self) {
+        let folder = &self.settings.staging_folder;
+        self.status = match staging::clear(folder) {
+            Ok(files) => format!("Cleared {} ({})", folder.display(), plural_files(files)),
+            Err(err) => {
+                tracing::error!(error = ?err, "couldn't clear the Staging folder");
+                error_chain(&err)
+            }
+        };
+        self.log.push(self.status.clone());
+        self.staging_count.invalidate();
+    }
+
+    fn start_job(&mut self, job: JobRun) {
         self.status = job.status();
         self.job = Some(job);
     }
@@ -165,6 +229,15 @@ impl RipAndLoadApp {
         self.status = job.status();
         if !job.is_finished() {
             ctx.request_repaint_after(JOB_POLL_INTERVAL);
+            return;
+        }
+        // Downloads and Uploads change what's in the Staging folder.
+        self.staging_count.invalidate();
+        if std::mem::take(&mut self.offer_clear_after_job)
+            && job.succeeded()
+            && let Ok(files @ 1..) = staging::count_files(&self.settings.staging_folder)
+        {
+            self.confirming_clear = Some(files);
         }
     }
 
@@ -204,6 +277,13 @@ impl RipAndLoadApp {
                 .clicked()
             {
                 self.check_tools();
+            }
+            if ui
+                .add_enabled(!self.job_running(), egui::Button::new("Test connection"))
+                .on_hover_text("Logs in to the Server and checks that the music folder is writable")
+                .clicked()
+            {
+                self.test_connection();
             }
         });
 
@@ -246,6 +326,32 @@ impl RipAndLoadApp {
         // Escape or a click outside the dialog counts as Cancel.
         if modal.should_close() {
             self.confirming_close = false;
+        }
+    }
+
+    fn confirm_clear(&mut self, ctx: &egui::Context) {
+        let Some(files) = self.confirming_clear else {
+            return;
+        };
+        let modal = egui::Modal::new(egui::Id::unique("confirm_clear")).show(ctx, |ui| {
+            ui.heading(format!("Clear Staging folder? ({})", plural_files(files)));
+            ui.label(format!(
+                "Deletes everything in {} from this computer. The Server keeps its copy.",
+                self.settings.staging_folder.display()
+            ));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Clear").clicked() {
+                    self.confirming_clear = None;
+                    self.clear_staging();
+                }
+                if ui.button("Keep").clicked() {
+                    self.confirming_clear = None;
+                }
+            });
+        });
+        if modal.should_close() {
+            self.confirming_clear = None;
         }
     }
 
@@ -313,11 +419,31 @@ impl eframe::App for RipAndLoadApp {
                 }
             }
             Tab::Upload => {
-                ui.label("Upload the Staging folder (ticket 07).");
+                let running = self.job_running();
+                match upload_tab::show(
+                    ui,
+                    self.settings.active_server(),
+                    &self.settings.staging_folder,
+                    &mut self.staging_count,
+                    running,
+                ) {
+                    upload_tab::Action::Upload => self.upload(),
+                    upload_tab::Action::Cancel => self.cancel_job(),
+                    upload_tab::Action::Clear => self.ask_to_clear(),
+                    upload_tab::Action::None => {}
+                }
             }
             Tab::Settings => self.settings_tab(ui),
         });
 
+        self.confirm_clear(&ctx);
         self.guard_close(&ctx);
+    }
+}
+
+fn plural_files(files: usize) -> String {
+    match files {
+        1 => "1 file".to_owned(),
+        n => format!("{n} files"),
     }
 }
