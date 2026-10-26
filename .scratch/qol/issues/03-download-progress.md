@@ -1,6 +1,6 @@
 # 03 – Download progress
 
-Status: ready-for-human
+Status: done
 
 Part of `../spec.md` (section 3).
 
@@ -13,7 +13,7 @@ Part of `../spec.md` (section 3).
 ## Acceptance
 
 - [x] On Linux and Windows (rich 13 in the WSL venv), the bars move while a Download runs.
-- [ ] The log and `ripandload.log` hold the static lines, no progress redraws.
+- [x] The log and `ripandload.log` hold the static lines, no progress redraws.
 - [x] Tests: recorded rich 13 output turns into the expected log lines and live rows.
 
 ## Comments
@@ -23,3 +23,4 @@ Part of `../spec.md` (section 3).
 - 2026-10-26: Review fixes. A one-row Live display (only "Downloading …" left between tracks) redraws with `\r ESC[2K` and no cursor-up, so a line logged then was lost; `\r` now starts a redraw too, and the new fixture `rich13-one-row.out` covers it. stdout and stderr each get their own `LiveOutput` (`JobEvent::Output { stream, bytes }`), and an escape sequence longer than 4 KiB is skipped instead of buffered forever. The end-to-end check (fake `rip` running streamrip's `ProgressManager` under rich 13) passed 5 of 5 runs with both recordings; the earlier missing last line didn't come back.
 
 - 2026-10-26: The user tested on Linux and Windows: the progress bars show and move, and Downloads work. Still open: checking that the log panel and `ripandload.log` hold streamrip's messages and no progress lines.
+- 2026-10-26: The user checked the log panel and `ripandload.log` after a Download: no progress lines. Closed.

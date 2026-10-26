@@ -1,6 +1,6 @@
 # Quality-of-life features after v1
 
-Status: ready-for-agent
+Status: done
 
 Three small features asked for after the v1 hand-off. Vocabulary follows `GLOSSARY.md`. Decided in a grilling session on 2026-10-26.
 
