@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use crate::command::{self, CommandSpec, Tool};
 use crate::error::ToolError;
 use crate::settings::{Server, Settings};
-use crate::wsl_path::to_wsl_path;
+use crate::wsl_path::{from_wsl_share, to_wsl_path};
 
 /// Where `rip` is inside WSL unless Settings say otherwise: the venv from the
 /// WSL setup steps.
@@ -110,14 +110,27 @@ impl ToolEnv {
     }
 
     /// `path` as the tools see it: unchanged natively, `/mnt/<drive>/…` in WSL.
+    /// A `\\wsl.localhost\<distro>\…` path must be in the distro the tools run
+    /// in; with WSL's default distro, whose name isn't known here, it's trusted.
     pub fn tool_path(&self, path: &Path) -> Result<String, ToolError> {
-        match self {
-            ToolEnv::Native { .. } => Ok(path.to_string_lossy().into_owned()),
-            ToolEnv::Wsl { .. } => {
-                to_wsl_path(path).ok_or_else(|| ToolError::NotReachableFromWsl {
+        let ToolEnv::Wsl { distro, .. } = self else {
+            return Ok(path.to_string_lossy().into_owned());
+        };
+        if let Some(translated) = to_wsl_path(path) {
+            return Ok(translated);
+        }
+        match (from_wsl_share(path), distro) {
+            (Some((share, _)), Some(distro)) if !share.eq_ignore_ascii_case(distro) => {
+                Err(ToolError::OtherDistro {
                     path: path.to_owned(),
+                    distro: share,
+                    tools_distro: distro.clone(),
                 })
             }
+            (Some((_, inside)), _) => Ok(inside),
+            (None, _) => Err(ToolError::NotReachableFromWsl {
+                path: path.to_owned(),
+            }),
         }
     }
 
@@ -365,6 +378,46 @@ mod tests {
                 .tool_path(Path::new(r"C:\Users\a b\Music"))
                 .unwrap(),
             "/mnt/c/Users/a b/Music"
+        );
+    }
+
+    #[test]
+    fn wsl_share_path_of_the_distro_is_its_own_path() {
+        assert_eq!(
+            debian()
+                .tool_path(Path::new(r"\\wsl.localhost\debian\home\a\Music"))
+                .unwrap(),
+            "/home/a/Music"
+        );
+    }
+
+    #[test]
+    fn wsl_share_path_of_another_distro_is_an_error() {
+        let err = debian()
+            .tool_path(Path::new(r"\\wsl.localhost\Ubuntu\home\a\Music"))
+            .unwrap_err();
+        assert!(
+            matches!(&err, ToolError::OtherDistro { distro, .. } if distro == "Ubuntu"),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            concat!(
+                r"\\wsl.localhost\Ubuntu\home\a\Music is inside the Ubuntu distro, ",
+                "but the tools run in Debian; set WSL distro in Settings to Ubuntu"
+            )
+        );
+    }
+
+    #[test]
+    fn wsl_share_path_with_the_default_distro_is_trusted() {
+        let env = ToolEnv::Wsl {
+            distro: None,
+            rip: None,
+        };
+        assert_eq!(
+            env.tool_path(Path::new(r"\\wsl$\Ubuntu\home\a")).unwrap(),
+            "/home/a"
         );
     }
 

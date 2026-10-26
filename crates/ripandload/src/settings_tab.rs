@@ -1,11 +1,12 @@
 //! The Settings form. It edits a `Settings` value in place; saving is the app's job.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use ripandload_core::settings::{FOLDER_PLACEHOLDERS, Settings, TRACK_PLACEHOLDERS};
 use ripandload_core::source::Source;
 use ripandload_core::tool_env::WSL_RIP;
+use ripandload_core::wsl_path::{from_wsl_share, to_wsl_path};
 
 pub fn show(ui: &mut egui::Ui, settings: &mut Settings) {
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -71,6 +72,7 @@ fn folders_and_tools(ui: &mut egui::Ui, settings: &mut Settings) {
                 .set_directory(&settings.staging_folder)
                 .pick_folder()
         {
+            adopt_distro(&mut settings.wsl_distro, &folder);
             settings.staging_folder = folder;
         }
     });
@@ -83,7 +85,20 @@ fn folders_and_tools(ui: &mut egui::Ui, settings: &mut Settings) {
 
         ui.label("streamrip inside WSL")
             .on_hover_text("With pyenv, e.g. ~/.pyenv/versions/<name>/bin/rip");
-        rip_executable(ui, settings, WSL_RIP);
+        ui.horizontal(|ui| {
+            rip_executable(ui, settings, WSL_RIP);
+            if ui.button("Browse…").clicked()
+                && let Some(file) = rfd::FileDialog::new().pick_file()
+            {
+                // Settings hold rip's path inside WSL, not the Windows one.
+                adopt_distro(&mut settings.wsl_distro, &file);
+                let inside = from_wsl_share(&file)
+                    .map(|(_, inside)| inside)
+                    .or_else(|| to_wsl_path(&file))
+                    .unwrap_or_else(|| file.display().to_string());
+                settings.rip_executable = Some(PathBuf::from(inside));
+            }
+        });
     } else {
         ui.label("streamrip executable");
         rip_executable(ui, settings, "rip, found on PATH");
@@ -107,7 +122,8 @@ fn rip_executable(ui: &mut egui::Ui, settings: &mut Settings, hint: &str) {
 }
 
 fn server(ui: &mut egui::Ui, settings: &mut Settings) {
-    let Some(server) = settings.active_server_mut() else {
+    let wsl_distro = &mut settings.wsl_distro;
+    let Some(server) = settings.servers.get_mut(settings.active_server) else {
         ui.label("No Server configured.");
         ui.end_row();
         return;
@@ -135,10 +151,22 @@ fn server(ui: &mut egui::Ui, settings: &mut Settings) {
         if ui.button("Browse…").clicked()
             && let Some(file) = rfd::FileDialog::new().pick_file()
         {
+            adopt_distro(wsl_distro, &file);
             server.ssh_key = file;
         }
     });
     ui.end_row();
+}
+
+/// On Windows, picking a file inside a distro (`\\wsl.localhost\Ubuntu\…`)
+/// while WSL distro is empty sets it, so the tools run where the file is.
+fn adopt_distro(wsl_distro: &mut Option<String>, picked: &Path) {
+    if cfg!(windows)
+        && wsl_distro.is_none()
+        && let Some((distro, _)) = from_wsl_share(picked)
+    {
+        *wsl_distro = Some(distro);
+    }
 }
 
 // --- Small widgets -----------------------------------------------------------

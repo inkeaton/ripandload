@@ -1,4 +1,6 @@
-//! Translating Windows paths to the paths WSL sees them at (ADR 0001).
+//! Translating Windows paths to the paths WSL sees them at (ADR 0001): drive
+//! paths like `C:\…`, and the distros' own files that Windows shows as
+//! `\\wsl.localhost\<distro>\…`.
 
 use std::path::Path;
 
@@ -26,6 +28,25 @@ pub fn to_wsl_path(path: &Path) -> Option<String> {
         drive.to_ascii_lowercase(),
         rest.replace('\\', "/")
     ))
+}
+
+/// `\\wsl.localhost\Ubuntu\home\a` → `("Ubuntu", "/home/a")`: the distro a
+/// path from Windows' WSL share is in, and the path inside it.
+///
+/// Older Windows uses `\\wsl$\` instead; both are accepted, in any case and
+/// with either slash. Anything else, or a share with no distro, gives `None`.
+pub fn from_wsl_share(path: &Path) -> Option<(String, String)> {
+    let text = path.to_str()?.replace('\\', "/");
+    let rest = text.strip_prefix("//")?;
+    let (host, rest) = rest.split_once('/')?;
+    if !host.eq_ignore_ascii_case("wsl.localhost") && !host.eq_ignore_ascii_case("wsl$") {
+        return None;
+    }
+    let (distro, inside) = rest.split_once('/').unwrap_or((rest, ""));
+    if distro.is_empty() {
+        return None;
+    }
+    Some((distro.to_owned(), format!("/{inside}")))
 }
 
 #[cfg(test)]
@@ -63,6 +84,54 @@ mod tests {
         // rsync cares: `staging/` means "the folder's contents".
         assert_eq!(wsl(r"C:\Music\").as_deref(), Some("/mnt/c/Music/"));
         assert_eq!(wsl(r"C:\").as_deref(), Some("/mnt/c/"));
+    }
+
+    fn share(path: &str) -> Option<(String, String)> {
+        from_wsl_share(Path::new(path))
+    }
+
+    fn found(distro: &str, path: &str) -> Option<(String, String)> {
+        Some((distro.to_owned(), path.to_owned()))
+    }
+
+    #[test]
+    fn wsl_localhost_share_gives_the_distro_and_its_own_path() {
+        assert_eq!(
+            share(r"\\wsl.localhost\Ubuntu\home\user\Music"),
+            found("Ubuntu", "/home/user/Music")
+        );
+    }
+
+    #[test]
+    fn older_wsl_dollar_share_works_too() {
+        assert_eq!(
+            share(r"\\wsl$\Debian\home\a b\.ssh\key"),
+            found("Debian", "/home/a b/.ssh/key")
+        );
+    }
+
+    #[test]
+    fn share_host_is_case_insensitive_and_slashes_can_be_forward() {
+        assert_eq!(
+            share("//WSL.LOCALHOST/Ubuntu/home/user/"),
+            found("Ubuntu", "/home/user/")
+        );
+    }
+
+    #[test]
+    fn distro_root_is_slash() {
+        assert_eq!(share(r"\\wsl.localhost\Ubuntu"), found("Ubuntu", "/"));
+        assert_eq!(share(r"\\wsl.localhost\Ubuntu\"), found("Ubuntu", "/"));
+    }
+
+    #[test]
+    fn other_paths_are_not_wsl_shares() {
+        assert_eq!(share(r"\\nas\music"), None);
+        assert_eq!(share(r"\\wsl.localhost"), None);
+        assert_eq!(share(r"\\wsl.localhost\"), None);
+        assert_eq!(share(r"C:\Users\a"), None);
+        assert_eq!(share("/home/a"), None);
+        assert_eq!(share(""), None);
     }
 
     #[test]

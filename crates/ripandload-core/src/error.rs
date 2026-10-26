@@ -40,8 +40,18 @@ pub enum ToolError {
         source: which::Error,
     },
 
-    #[error("{path} can't be reached from WSL; use a folder on a drive like C:")]
+    #[error("{path} can't be reached from WSL; use a folder on a drive like C: or inside WSL")]
     NotReachableFromWsl { path: PathBuf },
+
+    #[error(
+        "{path} is inside the {distro} distro, but the tools run in {tools_distro}; \
+         set WSL distro in Settings to {distro}"
+    )]
+    OtherDistro {
+        path: PathBuf,
+        distro: String,
+        tools_distro: String,
+    },
 }
 
 /// Why a job couldn't start.
