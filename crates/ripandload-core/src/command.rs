@@ -100,10 +100,26 @@ pub fn upload_spec(settings: &Settings, server: &Server) -> CommandSpec {
 /// folder itself; the one on the music folder makes rsync treat it as a folder.
 /// There's no `--delete`: an Upload never removes anything on the Server.
 pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
-    // 🦀 Exercise (ticket 07): make the `rsync_` tests below pass.
-    // `remote_shell(server)` and `server.destination()` are ready to use.
-    let _ = (server, staging, remote_shell); // delete this line when you start
-    todo!()
+    let path = check_trailing_slash(&staging.display().to_string());
+    let remote_folder = check_trailing_slash(&server.music_folder);
+
+    vec![
+        "-rtv".to_string(),
+        "--partial".to_string(),
+        "--chmod=D755,F644".to_string(),
+        "-e".to_string(),
+        remote_shell(server),
+        path,
+        format!("{}:{remote_folder}", server.destination()),
+    ]
+}
+
+pub fn check_trailing_slash(value: &str) -> String {
+    if value.ends_with("/") {
+        value.to_string()
+    } else {
+        format!("{value}/")
+    }
 }
 
 /// The commands behind "Test connection": log in and run `true`, then check
