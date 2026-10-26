@@ -41,7 +41,9 @@ pub struct Settings {
     pub quality: QualityDefaults,
     pub naming: NamingTemplates,
     pub staging_folder: PathBuf,
-    /// Linux only. `None` means "look up `rip` on PATH".
+    /// Where `rip` is. On Linux, `None` looks it up on PATH. On Windows it's
+    /// a path inside WSL (`~` allowed, e.g. a pyenv install), and `None` is
+    /// the ripandload venv, `tool_env::WSL_RIP`.
     pub rip_executable: Option<PathBuf>,
     /// Windows only. `None` means "WSL's default distro".
     pub wsl_distro: Option<String>,

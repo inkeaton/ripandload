@@ -4,7 +4,7 @@
 use std::fmt;
 use std::path::Path;
 
-use crate::settings::{Server, Settings};
+use crate::settings::Server;
 
 /// The streamrip version the app's Streamrip config is written for.
 pub const STREAMRIP_VERSION: &str = "2.2.0";
@@ -15,6 +15,8 @@ pub enum Tool {
     Rip,
     Rsync,
     Ssh,
+    /// Small helper scripts, e.g. copying the SSH key into WSL.
+    Sh,
 }
 
 impl Tool {
@@ -24,6 +26,7 @@ impl Tool {
             Tool::Rip => "rip",
             Tool::Rsync => "rsync",
             Tool::Ssh => "ssh",
+            Tool::Sh => "sh",
         }
     }
 }
@@ -86,10 +89,11 @@ pub fn download_spec(config: &str, urls: &[&str], quality: Option<u8>) -> Comman
 }
 
 /// An Upload: rsync the Staging folder's contents into the Server's music folder.
-pub fn upload_spec(settings: &Settings, server: &Server) -> CommandSpec {
+/// `staging` is the Staging folder as rsync sees it (`ToolEnv::tool_path`).
+pub fn upload_spec(staging: &Path, server: &Server) -> CommandSpec {
     CommandSpec {
         program: Tool::Rsync,
-        args: rsync_args(server, &settings.staging_folder),
+        args: rsync_args(server, staging),
         env: Vec::new(),
     }
 }
@@ -189,6 +193,30 @@ fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
+/// `sh -c <script> sh <args>…`: inside the script, `$1`… are `args`.
+pub fn sh_spec(script: &str, args: &[&str]) -> CommandSpec {
+    let mut spec = CommandSpec::new(Tool::Sh, &["-c", script]);
+    if !args.is_empty() {
+        spec.args.push("sh".to_owned());
+        spec.args.extend(args.iter().map(|arg| arg.to_string()));
+    }
+    spec
+}
+
+/// Check tools' first step inside WSL: can anything run there at all?
+pub fn wsl_check_spec() -> CommandSpec {
+    sh_spec("true", &[])
+}
+
+/// Lists streamrip installs under pyenv, one path per line, for when `rip`
+/// isn't where Settings say inside WSL.
+pub fn pyenv_probe_spec() -> CommandSpec {
+    sh_spec(
+        "ls -d ~/.pyenv/versions/*/bin/rip ~/.pyenv/shims/rip 2>/dev/null",
+        &[],
+    )
+}
+
 /// Finds the version in `rip --version` output, e.g. `rip, version 2.2.0`.
 pub fn parse_rip_version(line: &str) -> Option<&str> {
     let (_, version) = line.trim().split_once(", version ")?;
@@ -199,8 +227,6 @@ pub fn parse_rip_version(line: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    use crate::settings::Settings;
 
     #[test]
     fn version_specs_check_rip_then_rsync() {
@@ -344,11 +370,7 @@ mod tests {
 
     #[test]
     fn upload_spec_runs_rsync_from_the_staging_folder() {
-        let settings = Settings {
-            staging_folder: PathBuf::from("/home/mari/Music/ripandload"),
-            ..Default::default()
-        };
-        let spec = upload_spec(&settings, &server());
+        let spec = upload_spec(Path::new("/home/mari/Music/ripandload"), &server());
         assert_eq!(spec.program, Tool::Rsync);
         assert_eq!(
             spec.args[spec.args.len() - 2..],

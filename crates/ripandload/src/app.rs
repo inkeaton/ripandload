@@ -147,11 +147,17 @@ impl RipAndLoadApp {
             ));
         }
 
-        let spec = command::download_spec(
-            &config.to_string_lossy(),
-            &self.download.urls(),
-            self.download.quality,
-        );
+        // Rendering already translated the paths inside the Streamrip config,
+        // so this one translates too.
+        let config = match tool_env.tool_path(&config) {
+            Ok(config) => config,
+            Err(err) => {
+                self.status = error_chain(&err);
+                self.log.push(format!("✗ {}", self.status));
+                return;
+            }
+        };
+        let spec = command::download_spec(&config, &self.download.urls(), self.download.quality);
         let job = JobRun::download(tool_env, spec, &mut self.log);
         self.start_job(job);
     }
@@ -163,8 +169,12 @@ impl RipAndLoadApp {
             self.status = NO_SERVER.into();
             return;
         };
-        let spec = command::upload_spec(&self.settings, server);
-        let job = JobRun::upload(ToolEnv::from_settings(&self.settings), spec, &mut self.log);
+        let job = JobRun::upload(
+            ToolEnv::from_settings(&self.settings),
+            &self.settings.staging_folder,
+            server,
+            &mut self.log,
+        );
         self.start_job(job);
         self.offer_clear_after_job = true;
     }

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use eframe::egui;
 use ripandload_core::settings::{FOLDER_PLACEHOLDERS, Settings, TRACK_PLACEHOLDERS};
 use ripandload_core::source::Source;
+use ripandload_core::tool_env::WSL_RIP;
 
 pub fn show(ui: &mut egui::Ui, settings: &mut Settings) {
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -78,19 +79,31 @@ fn folders_and_tools(ui: &mut egui::Ui, settings: &mut Settings) {
     if cfg!(windows) {
         ui.label("WSL distro");
         optional_text(ui, &mut settings.wsl_distro, "WSL default");
+        ui.end_row();
+
+        ui.label("streamrip inside WSL")
+            .on_hover_text("With pyenv, e.g. ~/.pyenv/versions/<name>/bin/rip");
+        rip_executable(ui, settings, WSL_RIP);
     } else {
         ui.label("streamrip executable");
-        let mut text = settings
-            .rip_executable
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
-        let edit = egui::TextEdit::singleline(&mut text).hint_text("rip, found on PATH");
-        if ui.add(edit).changed() {
-            settings.rip_executable = (!text.trim().is_empty()).then(|| PathBuf::from(text));
-        }
+        rip_executable(ui, settings, "rip, found on PATH");
     }
     ui.end_row();
+}
+
+/// An empty field means the default, shown as the hint.
+fn rip_executable(ui: &mut egui::Ui, settings: &mut Settings, hint: &str) {
+    let mut text = settings
+        .rip_executable
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let edit = egui::TextEdit::singleline(&mut text)
+        .hint_text(hint)
+        .desired_width(f32::INFINITY);
+    if ui.add(edit).changed() {
+        settings.rip_executable = (!text.trim().is_empty()).then(|| PathBuf::from(text));
+    }
 }
 
 fn server(ui: &mut egui::Ui, settings: &mut Settings) {

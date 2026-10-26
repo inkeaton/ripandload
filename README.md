@@ -27,3 +27,5 @@ cargo build -p ripandload --release --target x86_64-pc-windows-gnu
 ```
 
 The result is a single file, `target/x86_64-pc-windows-gnu/release/ripandload.exe`, with no extra DLLs to ship.
+
+On Windows, streamrip and rsync run inside WSL; see [docs/wsl-setup.md](docs/wsl-setup.md) for the one-time setup.

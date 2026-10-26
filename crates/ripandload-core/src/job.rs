@@ -11,6 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::error::JobError;
+use crate::wsl_output::decode_tool_output;
 
 /// How often the job thread checks whether the process has exited or was cancelled.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -119,11 +120,15 @@ fn forward_lines(stream: impl Read + Send + 'static, sender: Sender<JobEvent>) -
         // `split` instead of `lines`: a byte that isn't UTF-8 becomes `�`
         // instead of ending the stream with an error.
         for line in BufReader::new(stream).split(b'\n') {
-            let Ok(mut bytes) = line else { break };
-            if bytes.last() == Some(&b'\r') {
-                bytes.pop();
+            let Ok(bytes) = line else { break };
+            // The second half of UTF-16's final `\n`, not a line of its own.
+            if bytes == [0] {
+                continue;
             }
-            let line = String::from_utf8_lossy(&bytes).into_owned();
+            let mut line = decode_tool_output(&bytes);
+            if line.ends_with('\r') {
+                line.pop();
+            }
             if sender.send(JobEvent::Line(line)).is_err() {
                 break;
             }

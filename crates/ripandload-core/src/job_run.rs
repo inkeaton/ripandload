@@ -1,11 +1,13 @@
 //! Runs Check tools, a Download, an Upload or Test connection: one or more
-//! commands one after another, writing into the log. The app polls it each frame; nothing here blocks.
+//! commands one after another, writing into the log. The app polls it each
+//! frame; nothing here blocks.
 
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::mpsc::TryRecvError;
 
 use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
-use crate::error::error_chain;
+use crate::error::{ToolError, error_chain};
 use crate::job::{Job, JobEvent, Outcome};
 use crate::settings::Server;
 use crate::tool_env::ToolEnv;
@@ -44,6 +46,9 @@ impl Kind {
 /// ssh's exit code when it couldn't connect or log in.
 const SSH_FAILED: i32 = 255;
 
+/// The shell's exit code when the program doesn't exist (inside WSL).
+const SHELL_NOT_FOUND: i32 = 127;
+
 pub struct JobRun {
     kind: Kind,
     tool_env: ToolEnv,
@@ -57,46 +62,68 @@ pub struct JobRun {
 
 impl JobRun {
     /// `rip --version` then `rsync --version`, checking streamrip's version.
+    /// Inside WSL, first checks that anything runs there at all.
     pub fn check_tools(tool_env: ToolEnv, log: &mut Vec<String>) -> Self {
-        Self::start(Kind::CheckTools, tool_env, command::version_specs(), log)
+        let mut specs = command::version_specs();
+        if tool_env.is_wsl() {
+            specs.insert(0, command::wsl_check_spec());
+        }
+        Self::start(Kind::CheckTools, tool_env, Ok(specs), log)
     }
 
     /// One `rip` run, from `command::download_spec`.
     pub fn download(tool_env: ToolEnv, spec: CommandSpec, log: &mut Vec<String>) -> Self {
-        Self::start(Kind::Download, tool_env, vec![spec], log)
+        Self::start(Kind::Download, tool_env, Ok(vec![spec]), log)
     }
 
-    /// One `rsync` run, from `command::upload_spec`.
-    pub fn upload(tool_env: ToolEnv, spec: CommandSpec, log: &mut Vec<String>) -> Self {
-        Self::start(Kind::Upload, tool_env, vec![spec], log)
+    /// rsyncs `staging` to the Server, after copying the SSH key into WSL if
+    /// the tools run there.
+    pub fn upload(
+        tool_env: ToolEnv,
+        staging: &Path,
+        server: &Server,
+        log: &mut Vec<String>,
+    ) -> Self {
+        let specs = tool_env.ssh_ready(server).and_then(|(server, copy_key)| {
+            let staging = tool_env.tool_path(staging)?;
+            let upload = command::upload_spec(Path::new(&staging), &server);
+            Ok(copy_key.into_iter().chain([upload]).collect())
+        });
+        Self::start(Kind::Upload, tool_env, specs, log)
     }
 
-    /// The ssh checks from `command::test_connection_specs`, stopping at the
-    /// first one that fails.
+    /// The ssh checks from `command::test_connection_specs`, after copying
+    /// the SSH key into WSL if the tools run there.
     pub fn test_connection(tool_env: ToolEnv, server: &Server, log: &mut Vec<String>) -> Self {
-        Self::start(
-            Kind::TestConnection,
-            tool_env,
-            command::test_connection_specs(server),
-            log,
-        )
+        let specs = tool_env.ssh_ready(server).map(|(server, copy_key)| {
+            copy_key
+                .into_iter()
+                .chain(command::test_connection_specs(&server))
+                .collect()
+        });
+        Self::start(Kind::TestConnection, tool_env, specs, log)
     }
 
+    /// Starts the first of `specs`, or logs why there are none to run.
     fn start(
         kind: Kind,
         tool_env: ToolEnv,
-        specs: Vec<CommandSpec>,
+        specs: Result<Vec<CommandSpec>, ToolError>,
         log: &mut Vec<String>,
     ) -> Self {
         let mut run = Self {
             kind,
             tool_env,
-            queue: specs.into(),
+            queue: VecDeque::new(),
             current: None,
             rip_version: None,
             problems: 0,
             cancelled: false,
         };
+        match specs {
+            Ok(specs) => run.queue = specs.into(),
+            Err(err) => run.problem(log, format!("✗ {}", error_chain(&err))),
+        }
         run.start_next(log);
         run
     }
@@ -117,6 +144,10 @@ impl JobRun {
         self.queue.clear();
         if let Some((_, job)) = &self.current {
             job.cancel();
+            // Best effort: if it doesn't work, the tool keeps running in WSL.
+            if let Some(mut kill) = self.tool_env.cancel_command() {
+                let _ = kill.spawn();
+            }
         }
     }
 
@@ -151,6 +182,14 @@ impl JobRun {
     }
 
     fn on_line(&mut self, line: String, log: &mut Vec<String>) {
+        if let Some((spec, _)) = &self.current
+            && *spec == command::pyenv_probe_spec()
+        {
+            log.push(format!(
+                "→ found streamrip at {line}; to use it, put that path in Settings"
+            ));
+            return;
+        }
         if self.kind == Kind::CheckTools
             && let Some((spec, _)) = &self.current
             && spec.program == Tool::Rip
@@ -166,6 +205,8 @@ impl JobRun {
             return;
         };
         match outcome {
+            // Finding nothing isn't a problem of its own.
+            _ if spec == command::pyenv_probe_spec() => {}
             Outcome::Succeeded if self.kind == Kind::CheckTools && spec.program == Tool::Rip => {
                 self.check_rip_version(log)
             }
@@ -173,6 +214,12 @@ impl JobRun {
             Outcome::Failed { code: Some(code) } => {
                 let message = self.failure_message(&spec, code);
                 self.problem(log, message);
+                if spec == command::wsl_check_spec() {
+                    // Nothing else can run either.
+                    self.queue.clear();
+                } else if self.kind == Kind::CheckTools && self.rip_missing_in_wsl(&spec, code) {
+                    self.queue.push_front(command::pyenv_probe_spec());
+                }
             }
             Outcome::Failed { code: None } => {
                 self.problem(log, format!("✗ {spec} ended without an exit code"));
@@ -186,7 +233,23 @@ impl JobRun {
 
     fn failure_message(&self, spec: &CommandSpec, code: i32) -> String {
         let failed = format!("✗ {spec} failed with exit code {code}");
+        if *spec == command::wsl_check_spec() {
+            return format!(
+                "{failed}: couldn't run anything inside WSL; check that WSL is installed \
+                 and the WSL distro in Settings exists (see wsl.exe's message above)"
+            );
+        }
         let hint = match (self.kind, code) {
+            _ if self.rip_missing_in_wsl(spec, code) => {
+                "streamrip isn't where Settings say inside WSL; follow the WSL setup steps, \
+                 or set its path in Settings (with pyenv, e.g. ~/.pyenv/versions/<name>/bin/rip)"
+            }
+            (_, SHELL_NOT_FOUND) if self.tool_env.is_wsl() => {
+                return format!(
+                    "{failed}: {} isn't installed inside WSL; follow the WSL setup steps",
+                    spec.program.name()
+                );
+            }
             (Kind::TestConnection | Kind::Upload, SSH_FAILED) => {
                 "couldn't reach or log in to the Server; check its host, port, user and SSH key"
             }
@@ -194,6 +257,10 @@ impl JobRun {
             _ => return failed,
         };
         format!("{failed}: {hint}")
+    }
+
+    fn rip_missing_in_wsl(&self, spec: &CommandSpec, code: i32) -> bool {
+        self.tool_env.is_wsl() && spec.program == Tool::Rip && code == SHELL_NOT_FOUND
     }
 
     fn check_rip_version(&mut self, log: &mut Vec<String>) {
@@ -229,6 +296,10 @@ impl JobRun {
                     self.current = Some((spec, job));
                     return;
                 }
+                Err(message) if self.tool_env.is_wsl() => self.problem(
+                    log,
+                    format!("✗ {message}; is WSL installed? (`wsl --install` in PowerShell)"),
+                ),
                 Err(message) => self.problem(log, format!("✗ {message}")),
             }
         }

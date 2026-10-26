@@ -12,6 +12,7 @@ pub mod source;
 pub mod staging;
 pub mod streamrip_config;
 pub mod tool_env;
+pub mod wsl_output;
 pub mod wsl_path;
 
 /// The app's version, shared by the GUI and any future frontends.

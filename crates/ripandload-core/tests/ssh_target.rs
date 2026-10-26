@@ -9,9 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use ripandload_core::command;
 use ripandload_core::job_run::JobRun;
-use ripandload_core::settings::{Server, Settings};
+use ripandload_core::settings::Server;
 use ripandload_core::tool_env::ToolEnv;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -53,16 +52,8 @@ fn test_connection(server: &Server) -> (JobRun, Vec<String>) {
 }
 
 fn upload(staging: &Path) -> (JobRun, Vec<String>) {
-    let settings = Settings {
-        staging_folder: staging.to_owned(),
-        ..Default::default()
-    };
     let mut log = Vec::new();
-    let job = JobRun::upload(
-        native(),
-        command::upload_spec(&settings, &server()),
-        &mut log,
-    );
+    let job = JobRun::upload(native(), staging, &server(), &mut log);
     run_to_end(job, log)
 }
 

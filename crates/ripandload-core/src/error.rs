@@ -40,8 +40,8 @@ pub enum ToolError {
         source: which::Error,
     },
 
-    #[error("running tools inside WSL isn't supported yet")]
-    WslNotSupported,
+    #[error("{path} can't be reached from WSL; use a folder on a drive like C:")]
+    NotReachableFromWsl { path: PathBuf },
 }
 
 /// Why a job couldn't start.

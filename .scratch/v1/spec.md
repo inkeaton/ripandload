@@ -21,7 +21,7 @@ Cargo workspace, edition 2024, MIT licence.
   - `source`: `Source` enum, detection from URL, Quality labels.
   - `streamrip_config`: before each Download, seed if missing (copy the user's personal config, or let `rip --config-path` create a default), then overwrite managed keys with `toml_edit`: Credentials, `use_auth_token = true`, quality, `filepaths.folder_format` / `track_format`, `downloads.folder` = Staging folder, database paths → app-owned files.
   - `command`: `CommandSpec { program, args, env }` builders for Download, Upload, Test connection, version checks. Pure values.
-  - `tool_env`: `enum ToolEnv { Native, Wsl { distro } }` turns a `CommandSpec` into `std::process::Command`. WSL: wraps in `wsl.exe -d <distro> --`, translates Windows paths to `/mnt/<drive>/…`, copies the SSH key into WSL with `chmod 600`, sets `CREATE_NO_WINDOW`, decodes `wsl.exe`'s own UTF-16 messages.
+  - `tool_env`: `enum ToolEnv { Native, Wsl { distro } }` turns a `CommandSpec` into `std::process::Command`. WSL: wraps in `wsl.exe -d <distro> --exec sh -c <wrapper>` (the wrapper expands `~` in the program and records its pid for Cancel), translates Windows paths to `/mnt/<drive>/…`, copies the SSH key into WSL with `chmod 600`, sets `CREATE_NO_WINDOW`, decodes `wsl.exe`'s own UTF-16 messages.
   - `job`: runs a `Command` on a `std::thread`, sends `JobEvent::{Line, Finished}` over `mpsc`; Cancel kills the child (plus best-effort `pkill` under WSL).
   - `staging`: count and clear the Staging folder's contents.
   - `error`: `thiserror` enums.
@@ -31,7 +31,7 @@ Flow: `Settings` → `CommandSpec` builder → `ToolEnv` → `Command` → `job`
 
 rsync: `rsync -rtv --partial --chmod=D755,F644 -e "ssh -i K -p P -o StrictHostKeyChecking=accept-new -o BatchMode=yes" <staging>/ <user>@<server>:<music folder>/`. Passphrase-protected keys only via ssh-agent.
 
-Windows layout (inside WSL): venv `~/.local/share/ripandload/venv` with `streamrip==2.2.0`, Streamrip config `~/.config/ripandload/streamrip.toml`. Staging folder defaults to `%USERPROFILE%\Music\ripandload`.
+Windows layout: inside WSL, venv `~/.local/share/ripandload/venv` with `streamrip==2.2.0` (or any `rip` path set in Settings, e.g. a pyenv environment). The Streamrip config stays on Windows, `%APPDATA%\ripandload\config\streamrip.toml` next to Settings, read by rip as `/mnt/c/…` (ADR 0002). Staging folder defaults to `%USERPROFILE%\Music\ripandload`. Setup steps: `docs/wsl-setup.md`.
 
 Crates: `eframe`, `rfd`, `anyhow` (gui); `serde`, `toml`, `toml_edit`, `directories`, `which`, `thiserror` (core); `tracing`, `tracing-subscriber` (both); `tempfile` (dev).
 
