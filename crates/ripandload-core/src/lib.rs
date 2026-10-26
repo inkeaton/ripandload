@@ -7,6 +7,7 @@ pub mod command;
 pub mod error;
 pub mod job;
 pub mod job_run;
+pub mod live_output;
 pub mod log_file;
 pub mod settings;
 pub mod source;

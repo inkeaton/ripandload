@@ -1,4 +1,4 @@
-//! Runs one process in the background and streams its output line by line.
+//! Runs one process in the background and streams its output.
 //!
 //! The GUI polls `Job::events` each frame, so it never blocks on the process.
 
@@ -21,6 +21,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub enum JobEvent {
     /// One line of stdout or stderr, without its line ending.
     Line(String),
+    /// From `Job::spawn_raw`: the next bytes of stdout or stderr, as they came.
+    Output(Vec<u8>),
     Finished(Outcome),
 }
 
@@ -54,9 +56,19 @@ pub struct Job {
 }
 
 impl Job {
-    /// Starts `command`. Its stdout and stderr are streamed if they were set
-    /// to `Stdio::piped()`, as `ToolEnv::command` does.
-    pub fn spawn(mut command: Command) -> Result<Job, JobError> {
+    /// Starts `command`. Its stdout and stderr are streamed line by line if
+    /// they were set to `Stdio::piped()`, as `ToolEnv::command` does.
+    pub fn spawn(command: Command) -> Result<Job, JobError> {
+        Self::spawn_with(command, forward_lines)
+    }
+
+    /// Like `spawn`, but streams the output as it comes, without waiting for
+    /// a line to end. For output that redraws itself, like progress bars.
+    pub fn spawn_raw(command: Command) -> Result<Job, JobError> {
+        Self::spawn_with(command, forward_chunks)
+    }
+
+    fn spawn_with(mut command: Command, forward: Forward) -> Result<Job, JobError> {
         let mut child = command.spawn().map_err(|source| JobError::Spawn {
             program: command.get_program().to_string_lossy().into_owned(),
             source,
@@ -67,11 +79,11 @@ impl Job {
             child
                 .stdout
                 .take()
-                .map(|out| forward_lines(out, sender.clone())),
+                .map(|out| forward(Box::new(out), sender.clone())),
             child
                 .stderr
                 .take()
-                .map(|err| forward_lines(err, sender.clone())),
+                .map(|err| forward(Box::new(err), sender.clone())),
         ]
         .into_iter()
         .flatten()
@@ -114,8 +126,11 @@ impl Drop for Job {
     }
 }
 
+/// Starts a thread that sends what a stream of the process says.
+type Forward = fn(Box<dyn Read + Send>, Sender<JobEvent>) -> JoinHandle<()>;
+
 /// Sends each line of `stream` until it closes or nobody is listening.
-fn forward_lines(stream: impl Read + Send + 'static, sender: Sender<JobEvent>) -> JoinHandle<()> {
+fn forward_lines(stream: Box<dyn Read + Send>, sender: Sender<JobEvent>) -> JoinHandle<()> {
     thread::spawn(move || {
         // `split` instead of `lines`: a byte that isn't UTF-8 becomes `�`
         // instead of ending the stream with an error.
@@ -131,6 +146,29 @@ fn forward_lines(stream: impl Read + Send + 'static, sender: Sender<JobEvent>) -
             }
             if sender.send(JobEvent::Line(line)).is_err() {
                 break;
+            }
+        }
+    })
+}
+
+/// Sends whatever `stream` has, as soon as it has it, until it closes or
+/// nobody is listening.
+fn forward_chunks(mut stream: Box<dyn Read + Send>, sender: Sender<JobEvent>) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let mut buffer = [0; 4096];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    if sender
+                        .send(JobEvent::Output(buffer[..read].to_vec()))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
             }
         }
     })

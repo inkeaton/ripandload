@@ -489,6 +489,18 @@ impl eframe::App for RipAndLoadApp {
                     });
             });
 
+        // rip's progress bars, between the tab and the log, only while they're up.
+        let live_rows = self.job.as_ref().map(JobRun::live_rows).unwrap_or_default();
+        if !live_rows.is_empty() {
+            egui::Panel::bottom("live").show(ui, |ui| {
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    for row in &live_rows {
+                        ui.add(egui::Label::new(egui::RichText::new(row).monospace()).extend());
+                    }
+                });
+            });
+        }
+
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Download => {
                 let running = self.job_running();

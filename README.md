@@ -45,7 +45,7 @@ ripandload passes your Credentials to streamrip. streamrip's wiki explains how t
 
 ## Using it
 
-**Download**: paste one or more album, track or playlist URLs, one per line, and press **Download**. Each line shows which Source it was recognised as. Pick a Quality if you want something other than your default. Output appears in the log at the bottom, and **Cancel** stops it.
+**Download**: paste one or more album, track or playlist URLs, one per line, and press **Download**. Each line shows which Source it was recognised as. Pick a Quality if you want something other than your default. While it runs, streamrip's progress bars show above the log, and its messages appear in the log at the bottom. **Cancel** stops it.
 
 **Upload**: shows the Server, how many music files are in the Staging folder (covers and other files don't count), and a list of its albums and playlists. **Compare with Server** asks the Server which of them it already has, without sending anything. The list then marks each album "✓ on the Server" or with how many of its tracks are still to upload. Press **Upload** to copy everything new. Files the Server already has are skipped. When it finishes, the app offers to clear the Staging folder. If you keep the Staging folder as your own offline library, turn that question off in Settings. **Clear…** clears it at any time. Clearing only deletes your local copy.
 

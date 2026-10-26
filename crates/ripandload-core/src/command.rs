@@ -74,17 +74,31 @@ pub fn seed_config_spec(config: &str) -> CommandSpec {
     CommandSpec::new(Tool::Rip, &["--config-path", config, "config", "path"])
 }
 
-/// A Download: `rip --config-path <config> [-q N] --no-progress url <urls>…`.
+/// How wide rip's progress bars are drawn, in characters.
+pub const PROGRESS_COLUMNS: usize = 100;
+
+/// A Download: `rip --config-path <config> [-q N] url <urls>…`.
 /// `quality` overrides the Settings' Quality for every Source in this run.
-/// The Streamrip config must already be rendered.
+///
+/// rich, which draws rip's progress bars, draws none into a pipe. Its
+/// environment variables make it draw them anyway, for `LiveOutput` to read:
+/// `FORCE_COLOR` for rich 13 (which streamrip 2.2.0 pins), `TTY_COMPATIBLE`
+/// and `TTY_INTERACTIVE` for rich 14 and later.
 pub fn download_spec(config: &str, urls: &[&str], quality: Option<u8>) -> CommandSpec {
     let mut spec = CommandSpec::new(Tool::Rip, &["--config-path", config]);
     if let Some(quality) = quality {
         spec.args.extend(["-q".to_owned(), quality.to_string()]);
     }
-    spec.args
-        .extend(["--no-progress", "url"].map(str::to_owned));
+    spec.args.push("url".to_owned());
     spec.args.extend(urls.iter().map(|url| url.to_string()));
+    spec.env = [
+        ("FORCE_COLOR", "1".to_owned()),
+        ("TTY_COMPATIBLE", "1".to_owned()),
+        ("TTY_INTERACTIVE", "1".to_owned()),
+        ("COLUMNS", PROGRESS_COLUMNS.to_string()),
+    ]
+    .map(|(key, value)| (key.to_owned(), value))
+    .into();
     spec
 }
 
@@ -287,9 +301,24 @@ mod tests {
         );
         assert_eq!(
             spec.to_string(),
-            "rip --config-path /cfg/streamrip.toml --no-progress url https://open.qobuz.com/track/1"
+            "rip --config-path /cfg/streamrip.toml url https://open.qobuz.com/track/1"
         );
-        assert!(spec.env.is_empty());
+    }
+
+    #[test]
+    fn download_spec_makes_rich_draw_progress_bars_into_a_pipe() {
+        let spec = download_spec("/cfg/streamrip.toml", &["u1"], None);
+        let env = |key: &str| {
+            spec.env
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.as_str())
+        };
+        // rich 13, which streamrip 2.2.0 pins, and rich 14+.
+        assert_eq!(env("FORCE_COLOR"), Some("1"));
+        assert_eq!(env("TTY_COMPATIBLE"), Some("1"));
+        assert_eq!(env("TTY_INTERACTIVE"), Some("1"));
+        assert_eq!(env("COLUMNS"), Some(PROGRESS_COLUMNS.to_string().as_str()));
     }
 
     #[test]
@@ -306,7 +335,6 @@ mod tests {
                 "/cfg/streamrip.toml",
                 "-q",
                 "1",
-                "--no-progress",
                 "url",
                 "https://deezer.com/track/2",
             ]

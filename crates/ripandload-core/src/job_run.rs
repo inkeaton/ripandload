@@ -9,6 +9,7 @@ use std::sync::mpsc::TryRecvError;
 use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
 use crate::error::{ToolError, error_chain};
 use crate::job::{Job, JobEvent, Outcome};
+use crate::live_output::LiveOutput;
 use crate::settings::Server;
 use crate::tool_env::ToolEnv;
 
@@ -61,6 +62,8 @@ pub struct JobRun {
     /// For Compare with Server: the files an Upload would send, relative to
     /// the Staging folder.
     to_send: Vec<PathBuf>,
+    /// While `rip` downloads: its output, progress bars and all.
+    live: Option<LiveOutput>,
     problems: usize,
     cancelled: bool,
 }
@@ -139,6 +142,7 @@ impl JobRun {
             current: None,
             rip_version: None,
             to_send: Vec::new(),
+            live: None,
             problems: 0,
             cancelled: false,
         };
@@ -186,7 +190,20 @@ impl JobRun {
             };
             match event {
                 JobEvent::Line(line) => self.on_line(line, log),
-                JobEvent::Finished(outcome) => self.on_finished(outcome, log),
+                JobEvent::Output(bytes) => {
+                    let lines = self.live.as_mut().map(|live| live.feed(&bytes));
+                    for line in lines.into_iter().flatten() {
+                        self.on_line(line, log);
+                    }
+                }
+                JobEvent::Finished(outcome) => {
+                    if let Some(mut live) = self.live.take() {
+                        for line in live.finish() {
+                            self.on_line(line, log);
+                        }
+                    }
+                    self.on_finished(outcome, log);
+                }
             }
         }
     }
@@ -195,6 +212,14 @@ impl JobRun {
     /// send, relative to the Staging folder.
     pub fn to_send(&self) -> Option<&[PathBuf]> {
         (self.kind == Kind::Compare && self.succeeded()).then_some(&self.to_send)
+    }
+
+    /// rip's progress bars while a Download runs, one string per row.
+    pub fn live_rows(&self) -> Vec<String> {
+        self.live
+            .as_ref()
+            .map(LiveOutput::live_rows)
+            .unwrap_or_default()
     }
 
     pub fn status(&self) -> String {
@@ -324,13 +349,17 @@ impl JobRun {
         while let Some(spec) = self.queue.pop_front() {
             tracing::info!("$ {spec}");
             log.push(format!("$ {spec}"));
+            // A Download's progress bars redraw themselves, so it's read as it comes.
+            let raw = self.kind == Kind::Download && spec.program == Tool::Rip;
+            let spawn = if raw { Job::spawn_raw } else { Job::spawn };
             let job = self
                 .tool_env
                 .command(&spec)
                 .map_err(|err| error_chain(&err))
-                .and_then(|command| Job::spawn(command).map_err(|err| error_chain(&err)));
+                .and_then(|command| spawn(command).map_err(|err| error_chain(&err)));
             match job {
                 Ok(job) => {
+                    self.live = raw.then(LiveOutput::default);
                     self.current = Some((spec, job));
                     return;
                 }

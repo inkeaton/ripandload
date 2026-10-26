@@ -28,9 +28,27 @@ fn run_to_end(job: &Job) -> (Vec<String>, Outcome) {
     loop {
         match job.events().recv_timeout(TIMEOUT).expect("job hung") {
             JobEvent::Line(line) => lines.push(line),
+            JobEvent::Output(_) => panic!("Job::spawn sends lines"),
             JobEvent::Finished(outcome) => return (lines, outcome),
         }
     }
+}
+
+#[test]
+fn raw_output_arrives_without_waiting_for_a_newline() {
+    // A progress bar redraws with `\r` and doesn't end its line.
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "printf '10%%'; sleep 0.3; printf '\\r20%%'; sleep 5"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped());
+    let job = Job::spawn_raw(command).unwrap();
+
+    let first = job.events().recv_timeout(TIMEOUT).expect("job hung");
+    assert_eq!(first, JobEvent::Output(b"10%".to_vec()));
+    let second = job.events().recv_timeout(TIMEOUT).expect("job hung");
+    assert_eq!(second, JobEvent::Output(b"\r20%".to_vec()));
+    job.cancel();
 }
 
 #[test]
