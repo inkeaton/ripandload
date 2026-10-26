@@ -126,6 +126,32 @@ pub enum StagingError {
     Refused { path: PathBuf },
 }
 
+/// Why a pasted URL has no Preview. None of these stop a Download.
+#[derive(Debug, thiserror::Error)]
+pub enum PreviewError {
+    #[error("no preview for this kind of URL")]
+    Unsupported,
+
+    #[error("the share link didn't lead to a Deezer album, track, playlist or artist")]
+    UnreadableShareLink,
+
+    #[error("no preview until the first Qobuz Download")]
+    NoQobuzAppId,
+
+    #[error("no preview without a Qobuz auth token in Settings")]
+    NoQobuzToken,
+
+    #[error("couldn't ask {from}")]
+    Request {
+        from: crate::source::Source,
+        #[source]
+        err: Box<ureq::Error>,
+    },
+
+    #[error("{from} didn't answer with a name")]
+    Unexpected { from: crate::source::Source },
+}
+
 /// "outer error: inner cause: …", since `Display` shows only the outer message.
 /// Made for the status line, so OS error codes are dropped. Also what goes in
 /// the log file: a TOML error's `Debug` holds the whole file, Credentials

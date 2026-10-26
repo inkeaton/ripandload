@@ -291,6 +291,7 @@ impl RipAndLoadApp {
     fn job_finished(&mut self) {
         // Downloads and Uploads change what's in the Staging folder.
         self.staging_scan.invalidate();
+        self.download.retry_previews();
         let Some(job) = &self.job else {
             return;
         };
@@ -506,7 +507,12 @@ impl eframe::App for RipAndLoadApp {
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Download => {
                 let running = self.job_running();
-                match download_tab::show(ui, &mut self.download, running) {
+                match download_tab::show(
+                    ui,
+                    &mut self.download,
+                    running,
+                    &self.settings.qobuz.auth_token,
+                ) {
                     download_tab::Action::Download => self.download(),
                     download_tab::Action::Cancel => self.cancel_job(),
                     download_tab::Action::None => {}

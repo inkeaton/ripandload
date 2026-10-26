@@ -42,6 +42,16 @@ pub fn personal_path() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|dirs| dirs.config_dir().join("streamrip").join("config.toml"))
 }
 
+/// The Qobuz `app_id` streamrip saved in the Streamrip config on its first
+/// Qobuz login; the app doesn't manage it, so `render` keeps it. `None` while
+/// there's no config yet or the key is still empty.
+pub fn qobuz_app_id(config: &Path) -> Option<String> {
+    let text = fs::read_to_string(config).ok()?;
+    let doc: DocumentMut = text.parse().ok()?;
+    let app_id = doc.get("qobuz")?.get("app_id")?.as_str()?.trim();
+    (!app_id.is_empty()).then(|| app_id.to_owned())
+}
+
 /// Makes sure the Streamrip config at `config` exists, then rewrites the keys
 /// the app manages from `settings`. Everything else in the file is kept.
 ///

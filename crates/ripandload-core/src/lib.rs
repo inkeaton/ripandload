@@ -9,6 +9,7 @@ pub mod job;
 pub mod job_run;
 pub mod live_output;
 pub mod log_file;
+pub mod preview;
 pub mod settings;
 pub mod source;
 pub mod staging;

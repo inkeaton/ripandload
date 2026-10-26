@@ -1,0 +1,11 @@
+{
+  "id": 302127,
+  "title": "Discovery",
+  "record_type": "album",
+  "release_date": "2001-03-07",
+  "nb_tracks": 14,
+  "artist": {
+    "id": 27,
+    "name": "Daft Punk"
+  }
+}

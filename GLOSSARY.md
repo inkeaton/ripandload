@@ -30,6 +30,10 @@ _Avoid_: Rip, job, fetch
 The local folder where Downloads land and from which Uploads are made.
 _Avoid_: Download folder, temp folder, inbox
 
+**Preview**:
+The kind, name and artist looked up for a pasted URL before a Download. It's only information and never blocks one.
+_Avoid_: Metadata, lookup, info
+
 ### Sharing music
 
 **Server**:
