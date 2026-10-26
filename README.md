@@ -32,7 +32,7 @@ Open the **Settings** tab, fill it in, and press **Save**. A "• unsaved change
 - **Credentials**: Qobuz user ID and auth token, or Deezer ARL. You only need the Source(s) you use.
 - **Quality**: the default Quality per Source. You can override it for a single Download.
 - **Naming templates**: how downloaded folders and tracks are named. Click a placeholder to add it. The defaults are streamrip's own.
-- **Staging folder**: where Downloads land. The default is `Music/ripandload` in your home folder.
+- **Staging folder**: where Downloads land. The default is `Music/ripandload` in your home folder. Below it, **Offer to clear the Staging folder after an Upload** is on by default.
 - **WSL distro** (Windows): the distro you set up for ripandload. Leave it empty to use WSL's default distro.
 - **streamrip inside WSL** (Windows) or **streamrip executable** (Linux): leave it empty unless streamrip lives somewhere unusual.
 - **Server**: host, user, port, the Server's music folder (e.g. `/srv/music`), and your SSH key file.
@@ -47,7 +47,7 @@ ripandload passes your Credentials to streamrip. streamrip's wiki explains how t
 
 **Download**: paste one or more album, track or playlist URLs, one per line, and press **Download**. Each line shows which Source it was recognised as. Pick a Quality if you want something other than your default. Output appears in the log at the bottom, and **Cancel** stops it.
 
-**Upload**: shows the Server and how many files are waiting in the Staging folder. Press **Upload** to copy them all. When it finishes, the app offers to clear the Staging folder. **Clear…** does the same at any time. Clearing only deletes your local copy.
+**Upload**: shows the Server and how many files are waiting in the Staging folder. Press **Upload** to copy them all. When it finishes, the app offers to clear the Staging folder. If you keep the Staging folder as your own offline library, turn that question off in Settings. **Clear…** clears it at any time. Clearing only deletes your local copy.
 
 One Download or Upload runs at a time.
 

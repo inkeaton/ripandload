@@ -41,6 +41,9 @@ pub struct Settings {
     pub quality: QualityDefaults,
     pub naming: NamingTemplates,
     pub staging_folder: PathBuf,
+    /// After a successful Upload, ask whether to clear the Staging folder.
+    /// Off for someone who keeps it as their offline library.
+    pub offer_clear_after_upload: bool,
     /// Where `rip` is. On Linux, `None` looks it up on PATH. On Windows it's
     /// a path inside WSL (`~` allowed, e.g. a pyenv install), and `None` is
     /// the ripandload venv, `tool_env::WSL_RIP`.
@@ -117,6 +120,7 @@ impl Default for Settings {
             quality: QualityDefaults::default(),
             naming: NamingTemplates::default(),
             staging_folder: default_staging_folder(),
+            offer_clear_after_upload: true,
             rip_executable: None,
             wsl_distro: None,
             servers: vec![Server::default()],
@@ -334,6 +338,15 @@ mod tests {
         assert_eq!(settings.deezer.arl, "abc");
         assert_eq!(settings.quality, QualityDefaults::default());
         assert_eq!(settings.servers.len(), 1);
+    }
+
+    #[test]
+    fn settings_from_before_the_clear_toggle_still_offer_to_clear() {
+        let (_dir, path) = temp_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "staging_folder = \"/music\"\n").unwrap();
+
+        assert!(Settings::load(&path).unwrap().offer_clear_after_upload);
     }
 
     #[test]

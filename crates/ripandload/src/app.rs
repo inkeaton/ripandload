@@ -40,6 +40,14 @@ impl Tab {
     }
 }
 
+/// What the "clear Staging folder?" dialog shows.
+#[derive(Debug, Clone, Copy)]
+struct ClearPrompt {
+    files: usize,
+    /// It opened by itself after an Upload, rather than from Clear….
+    after_upload: bool,
+}
+
 pub struct RipAndLoadApp {
     tab: Tab,
     /// Output of the current or last job, one entry per line.
@@ -51,8 +59,8 @@ pub struct RipAndLoadApp {
     staging_count: StagingCount,
     /// The current job is an Upload; offer to clear the Staging folder if it works.
     offer_clear_after_job: bool,
-    /// The "clear Staging folder?" dialog is open, for this many files.
-    confirming_clear: Option<usize>,
+    /// The "clear Staging folder?" dialog is open.
+    confirming_clear: Option<ClearPrompt>,
     /// What the Settings tab is editing.
     settings: Settings,
     /// What's on disk, to tell whether there are unsaved changes.
@@ -179,7 +187,7 @@ impl RipAndLoadApp {
             &mut self.log,
         );
         self.start_job(job);
-        self.offer_clear_after_job = true;
+        self.offer_clear_after_job = self.settings.offer_clear_after_upload;
     }
 
     fn test_connection(&mut self) {
@@ -200,7 +208,12 @@ impl RipAndLoadApp {
     fn ask_to_clear(&mut self) {
         match staging::count_files(&self.settings.staging_folder) {
             Ok(0) => self.status = "The Staging folder is already empty.".into(),
-            Ok(files) => self.confirming_clear = Some(files),
+            Ok(files) => {
+                self.confirming_clear = Some(ClearPrompt {
+                    files,
+                    after_upload: false,
+                })
+            }
             Err(err) => self.status = error_chain(&err),
         }
     }
@@ -250,7 +263,10 @@ impl RipAndLoadApp {
             && job.succeeded()
             && let Ok(files @ 1..) = staging::count_files(&self.settings.staging_folder)
         {
-            self.confirming_clear = Some(files);
+            self.confirming_clear = Some(ClearPrompt {
+                files,
+                after_upload: true,
+            });
         }
     }
 
@@ -343,7 +359,11 @@ impl RipAndLoadApp {
     }
 
     fn confirm_clear(&mut self, ctx: &egui::Context) {
-        let Some(files) = self.confirming_clear else {
+        let Some(ClearPrompt {
+            files,
+            after_upload,
+        }) = self.confirming_clear
+        else {
             return;
         };
         let modal = egui::Modal::new(egui::Id::unique("confirm_clear")).show(ctx, |ui| {
@@ -352,6 +372,9 @@ impl RipAndLoadApp {
                 "Deletes everything in {} from this computer. The Server keeps its copy.",
                 self.settings.staging_folder.display()
             ));
+            if after_upload {
+                ui.weak("You can turn this question off in Settings.");
+            }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui.button("Clear").clicked() {

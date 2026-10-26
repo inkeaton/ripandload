@@ -78,6 +78,14 @@ fn folders_and_tools(ui: &mut egui::Ui, settings: &mut Settings) {
     });
     ui.end_row();
 
+    ui.label("");
+    ui.checkbox(
+        &mut settings.offer_clear_after_upload,
+        "Offer to clear the Staging folder after an Upload",
+    )
+    .on_hover_text("Turn off to keep the Staging folder as your offline library");
+    ui.end_row();
+
     if cfg!(windows) {
         ui.label("WSL distro");
         optional_text(ui, &mut settings.wsl_distro, "WSL default");
