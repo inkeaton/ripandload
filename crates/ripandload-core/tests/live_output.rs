@@ -126,3 +126,25 @@ fn an_escape_sequence_that_never_ends_doesnt_swallow_the_rest() {
 
     assert_eq!(lines.last().map(String::as_str), Some("hello"));
 }
+
+/// Cursor up above the top of the Live display keeps the rows it moved over.
+#[test]
+fn cursor_up_above_the_live_display_doesnt_panic() {
+    let mut output = LiveOutput::default();
+
+    let finished = output.feed(b"a\nb\n\x1b[?25l\x1b[2A");
+
+    assert!(finished.is_empty());
+    assert_eq!(output.finish(), ["a", "b"]);
+}
+
+/// With the Live display off, cursor up past the returned rows stays on the
+/// first row kept.
+#[test]
+fn cursor_up_past_returned_rows_stops_at_the_first_kept_row() {
+    let mut output = LiveOutput::default();
+
+    assert_eq!(output.feed(b"a\nb\n"), ["a", "b"]);
+
+    assert_eq!(output.feed(b"\x1b[3Axyz\n"), ["xyz"]);
+}

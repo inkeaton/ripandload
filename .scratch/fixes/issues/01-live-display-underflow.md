@@ -1,6 +1,6 @@
 # 01 – Live display underflow
 
-Status: ready-for-agent
+Status: done
 Blocked by: none
 
 Part of `../spec.md`. First noted in `../../doc-comments/issues/08-wsl-and-output.md`.

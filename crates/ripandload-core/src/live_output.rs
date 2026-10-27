@@ -152,13 +152,21 @@ impl LiveOutput {
     /// The cursor and `live_top` move up by as many rows, so they still point
     /// at the same rows.
     ///
+    /// Rows at or below the cursor stay, even when the cursor is above the
+    /// top of the Live display. Cursor up past the rows already handed out
+    /// stops at the first row kept, so it never rewrites a row already
+    /// returned.
+    ///
     /// # Panics
     ///
-    /// Panics in a debug build (and wraps in release) when the cursor is
-    /// above the top of the Live display, e.g. after `ESC[?25l` then
-    /// `ESC[2A`. rich never writes that.
+    /// Doesn't panic: `done` is at most `row`, and `live_top` is at least
+    /// `done` whenever it is the smaller bound.
     fn take_finished(&mut self) -> Vec<String> {
-        let done = self.live_top.unwrap_or(self.row).min(self.rows.len());
+        let done = self
+            .live_top
+            .unwrap_or(self.row)
+            .min(self.rows.len())
+            .min(self.row);
         self.row -= done;
         self.live_top = self.live_top.map(|top| top - done);
         self.rows.drain(..done).map(|row| text(&row)).collect()
