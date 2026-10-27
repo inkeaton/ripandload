@@ -1,6 +1,6 @@
 # 06 – Previews looked up twice
 
-Status: ready-for-agent
+Status: done
 Blocked by: 05
 
 Part of `../spec.md`. Blocked by 05 only because both edit `app.rs`.
@@ -20,3 +20,7 @@ Part of `../spec.md`. Blocked by 05 only because both edit `app.rs`.
 - [ ] Unit tests in a new `mod tests` in `download_tab.rs` (with the test-code allow from `comments-rust.md`): `retry` keeps `Ready`, forgets `LookingUp` and `Unavailable`, and drops late answers from the old round (feed the channel directly; `egui::Context::default()` works headless if `update` is needed).
 - [ ] Checked by hand: Check tools doesn't re-run lookups (the debug log shows no new "no preview" lines).
 - [ ] `dev/check.sh` passes.
+
+## Comments
+
+Not checked by hand: the session has no display. `job_finished` now calls `retry_previews` only when the new `JobRun::is_download` is true. The two unit tests cover `retry` and the round check.

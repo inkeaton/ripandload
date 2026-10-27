@@ -47,8 +47,10 @@ impl DownloadForm {
 
     /// Looks up the URLs without a Preview again.
     ///
-    /// The app calls it after each run: a Download fills in the Qobuz
-    /// `app_id`, and a failed lookup may have been a network blip.
+    /// The app calls it after a Download, the one run that can fill in the
+    /// Qobuz `app_id`; a failed lookup may also have been a network blip.
+    /// Other runs leave the Previews alone, so lookups still running aren't
+    /// started twice.
     pub fn retry_previews(&mut self) {
         self.previews.retry();
     }
@@ -242,7 +244,9 @@ impl Previews {
     ///
     /// A missing Qobuz auth token or `app_id`, or the network, may have been
     /// fixed since. Lookups still running are left to finish, but their
-    /// answers are dropped.
+    /// answers are dropped, and the URLs are looked up again: after a
+    /// Download, a lookup still running may have read the Streamrip config
+    /// before the `app_id` was written.
     fn retry(&mut self) {
         self.round += 1;
         self.by_url
@@ -381,4 +385,75 @@ enum PreviewState {
     /// The lookup failed; holds what the URL's line says instead, e.g.
     /// "no preview".
     Unavailable(String),
+}
+
+// == Tests ====================================================================
+
+#[cfg(test)]
+#[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
+mod tests {
+    use super::*;
+    use ripandload_core::preview::Kind;
+
+    // == Fixtures =============================================================
+
+    /// Returns a Preview of an album.
+    fn ready() -> PreviewState {
+        PreviewState::Ready(Preview {
+            kind: Kind::Album,
+            text: "Daft Punk – Discovery".into(),
+        })
+    }
+
+    /// Returns Previews that know a `Ready`, a `LookingUp` and an
+    /// `Unavailable` URL, named `ready`, `looking` and `unavailable`.
+    fn previews() -> Previews {
+        let mut previews = Previews::default();
+        previews.by_url.insert("ready".into(), ready());
+        previews
+            .by_url
+            .insert("looking".into(), PreviewState::LookingUp);
+        previews.by_url.insert(
+            "unavailable".into(),
+            PreviewState::Unavailable("no preview".into()),
+        );
+        previews
+    }
+
+    // == Retrying =============================================================
+
+    /// A retry keeps the Previews found and forgets every other URL.
+    #[test]
+    fn retry_keeps_ready_and_forgets_the_rest() {
+        let mut previews = previews();
+
+        previews.retry();
+
+        assert!(matches!(previews.get("ready"), PreviewState::Ready(_)));
+        assert_eq!(previews.by_url.len(), 1);
+    }
+
+    /// An answer from before the retry is dropped; one from after it is kept.
+    #[test]
+    fn answers_from_the_old_round_are_dropped() {
+        let mut previews = previews();
+        let old_round = previews.round;
+        previews.retry();
+        previews
+            .sender
+            .send((old_round, "looking".into(), ready()))
+            .unwrap();
+        previews
+            .sender
+            .send((previews.round, "unavailable".into(), ready()))
+            .unwrap();
+
+        previews.update(&egui::Context::default(), &[], false, "");
+
+        assert!(!previews.by_url.contains_key("looking"));
+        assert!(matches!(
+            previews.get("unavailable"),
+            PreviewState::Ready(_)
+        ));
+    }
 }

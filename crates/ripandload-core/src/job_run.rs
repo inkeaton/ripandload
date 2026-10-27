@@ -290,6 +290,12 @@ impl JobRun {
         self.is_finished() && !self.cancelled && self.problems == 0
     }
 
+    /// Returns whether this is a Download, the one run that can write the
+    /// Qobuz `app_id` into the Streamrip config.
+    pub fn is_download(&self) -> bool {
+        self.kind == Kind::Download
+    }
+
     /// Returns whether this is an Upload that succeeded, so the Server has
     /// everything.
     pub fn upload_succeeded(&self) -> bool {

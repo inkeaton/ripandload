@@ -316,17 +316,19 @@ impl RipAndLoadApp {
     /// Catches the app up with a run that has just ended.
     ///
     /// Called once per run. It marks the Staging folder for a rescan,
-    /// retries the Previews that failed, builds a Comparison from what the
-    /// run found out, if anything, and after a successful Upload offers to
-    /// clear the Staging folder, if Settings say to. If the Staging folder
-    /// can't be read for the Comparison, the status bar says why.
+    /// retries the Previews that failed after a Download, builds a Comparison
+    /// from what the run found out, if anything, and after a successful Upload
+    /// offers to clear the Staging folder, if Settings say to. If the Staging
+    /// folder can't be read for the Comparison, the status bar says why.
     fn job_finished(&mut self) {
         // Downloads and Uploads change what's in the Staging folder.
         self.staging_scan.invalidate();
-        self.download.retry_previews();
         let Some(job) = &self.job else {
             return;
         };
+        if job.is_download() {
+            self.download.retry_previews();
+        }
         let folder = &self.settings.staging_folder;
         let at_start = self.staging_at_start.take();
         if let (Some(to_send), Some(at_start)) = (job.to_send(), at_start) {
