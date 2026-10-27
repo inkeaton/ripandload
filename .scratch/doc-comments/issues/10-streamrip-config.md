@@ -1,7 +1,7 @@
 # 10 – Apply the comment style: Streamrip config
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 09
 
 Part of `../map.md`. Slicing decided in `06-rollout-slicing.md`.
@@ -24,15 +24,24 @@ Comments only. Code changes are limited to pure moves of items into their sectio
 
 ## Acceptance
 
-- [ ] No clippy warnings in these files:
+- [x] No clippy warnings in these files:
   `cargo clippy --workspace --all-targets --message-format=short 2>&1 | grep -E '^(crates/ripandload-core/src/streamrip_config\.rs|crates/ripandload-core/tests/streamrip_config\.rs):'` prints nothing.
-- [ ] No rustdoc warnings in these files:
+- [x] No rustdoc warnings in these files:
   `cargo doc --workspace --no-deps --document-private-items --message-format=short 2>&1 | grep -E '^(crates/ripandload-core/src/streamrip_config\.rs|crates/ripandload-core/tests/streamrip_config\.rs):'` prints nothing.
-- [ ] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
-- [ ] `cargo fmt --all --check` and `cargo test --workspace` pass.
-- [ ] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
+- [x] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
+- [x] `cargo fmt --all --check` and `cargo test --workspace` pass.
+- [x] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
 
 ## Notes
 
 - Big files are documented as they are. If a file still reads badly with dividers, say so under Comments as a candidate for a later split; don't split it here.
 - Other files' warnings are out of scope. `dev/check.sh` stays red until ticket 14 is done.
+
+## Comments
+
+- Glossary gap: "personal streamrip config" is used as a term in doc prose but only appears inside the Streamrip config entry, not as an entry of its own.
+- No split needed. `streamrip_config.rs` reads well as Locations, Rendering, Managed keys, Qobuz app ID, then Rendering steps and Helpers.
+- `set_managed` has a `# Panics` section saying it doesn't panic. `missing_panics_doc` forces the heading because of an `expect` that can't be reached. Removing the heading would need a code change or an `#[allow]`. If that's the pattern for unreachable `expect`s, it may be worth writing into the guide.
+- The module header's "Managed keys" list repeats what `apply` writes, so adding a managed key means editing both places (and the tests).
+- `Seeded` sits in the "Rendering" topic section rather than a first types section, since only `render` returns it.
+- Code smells, not fixed here (comments only): `set_managed` is `pub` but only this module uses it, and the unit tests build `ToolEnv::Wsl { distro: None, rip: None }` twice.

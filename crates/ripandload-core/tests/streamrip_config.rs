@@ -1,5 +1,13 @@
-//! Rendering the Streamrip config into a temporary folder, seeded from
-//! `tests/fixtures/personal-streamrip.toml`.
+//! Checks rendering the Streamrip config into real files.
+//!
+//! Each test renders into its own temporary folder, where the Streamrip
+//! config doesn't exist yet. The personal config there is a copy of
+//! `tests/fixtures/personal-streamrip.toml`, a streamrip 2.2.0 config with
+//! its own Credentials and Quality. Tests that seed from it use a `rip` that
+//! doesn't exist, so they fail if seeding ever runs `rip`. The tests where
+//! `rip` creates the default run a script in its place, so only on Unix.
+
+#![allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,19 +22,32 @@ mod common;
 #[cfg(unix)]
 use common::script_rip;
 
+// == Fixtures =================================================================
+
+/// The personal streamrip config every test's personal config is copied from.
 const PERSONAL_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/personal-streamrip.toml"
 );
 
+/// One test's temporary folder and the two configs in it.
 struct Setup {
+    /// The temporary folder, deleted when the `Setup` is dropped.
     dir: TempDir,
+    /// The personal config, `streamrip/config.toml` in `dir`.
     personal: PathBuf,
+    /// The Streamrip config, `ripandload/streamrip.toml` in `dir`.
     config: PathBuf,
 }
 
-/// A personal config copied from the fixture, and a not-yet-existing
-/// Streamrip config in a folder that doesn't exist either.
+/// Returns a fresh temporary folder with a personal config in it.
+///
+/// The personal config is a copy of [`PERSONAL_FIXTURE`]. The Streamrip
+/// config doesn't exist yet, and neither does its folder.
+///
+/// # Panics
+///
+/// Panics if the folder can't be created or the fixture can't be copied.
 fn setup() -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let personal = dir.path().join("streamrip").join("config.toml");
@@ -40,6 +61,10 @@ fn setup() -> Setup {
     }
 }
 
+/// Returns Settings whose managed keys all differ from the personal config.
+///
+/// Credentials, Quality and Naming templates are set to test values, and
+/// `staging` is the Staging folder.
 fn settings(staging: &Path) -> Settings {
     let mut settings = Settings::default();
     settings.qobuz.user_id = "12345".into();
@@ -53,21 +78,37 @@ fn settings(staging: &Path) -> Settings {
     settings
 }
 
-/// Seeding should never run `rip` while a personal config exists.
+/// Returns native tools whose `rip` doesn't exist.
+///
+/// Seeding must never run `rip` while a personal config exists, so a test
+/// using these fails if it does.
 fn no_rip() -> ToolEnv {
     ToolEnv::Native {
         rip: Some(PathBuf::from("/nonexistent/rip")),
     }
 }
 
+/// Reads the TOML file at `path` into a table.
+///
+/// # Panics
+///
+/// Panics if the file can't be read or isn't valid TOML.
 fn parse(path: &Path) -> toml::Table {
     fs::read_to_string(path).unwrap().parse().unwrap()
 }
 
+/// Returns `key` in `[section]` of `table`.
+///
+/// # Panics
+///
+/// Panics if `table` has no such section or key.
 fn get<'a>(table: &'a toml::Table, section: &str, key: &str) -> &'a toml::Value {
     &table[section][key]
 }
 
+// == Seeding from the personal config =========================================
+
+/// A first render copies the personal config and sets every managed key.
 #[test]
 fn seeded_from_personal_config_with_managed_keys_from_settings() {
     let s = setup();
@@ -113,6 +154,7 @@ fn seeded_from_personal_config_with_managed_keys_from_settings() {
     );
 }
 
+/// The personal config's unmanaged keys and its comments are all kept.
 #[test]
 fn unmanaged_keys_and_comments_survive() {
     let s = setup();
@@ -137,6 +179,7 @@ fn unmanaged_keys_and_comments_survive() {
     }
 }
 
+/// Rendering never changes the personal config, however often it runs.
 #[test]
 fn personal_config_is_never_modified() {
     let s = setup();
@@ -151,6 +194,22 @@ fn personal_config_is_never_modified() {
     assert_eq!(fs::read(&s.personal).unwrap(), before);
 }
 
+/// The rendered Streamrip config is readable only by its owner.
+#[cfg(unix)]
+#[test]
+fn rendered_config_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = setup();
+    let staging = s.dir.path().join("Staging");
+    streamrip_config::render(&s.config, Some(&s.personal), &settings(&staging), &no_rip()).unwrap();
+
+    let mode = fs::metadata(&s.config).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+// == Rendering again ==========================================================
+
+/// A second render with the same Settings leaves the file as it was.
 #[test]
 fn rendering_twice_is_idempotent() {
     let s = setup();
@@ -166,6 +225,7 @@ fn rendering_twice_is_idempotent() {
     assert_eq!(fs::read_to_string(&s.config).unwrap(), first);
 }
 
+/// An existing Streamrip config keeps hand edits and takes new Settings.
 #[test]
 fn existing_config_is_updated_not_reseeded() {
     let s = setup();
@@ -188,18 +248,9 @@ fn existing_config_is_updated_not_reseeded() {
     assert_eq!(*get(&config, "qobuz", "quality"), 4.into());
 }
 
-#[cfg(unix)]
-#[test]
-fn rendered_config_is_private() {
-    use std::os::unix::fs::PermissionsExt;
-    let s = setup();
-    let staging = s.dir.path().join("Staging");
-    streamrip_config::render(&s.config, Some(&s.personal), &settings(&staging), &no_rip()).unwrap();
+// == Seeding with rip =========================================================
 
-    let mode = fs::metadata(&s.config).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
-}
-
+/// Without a personal config, `rip` creates the default and Settings apply.
 #[cfg(unix)]
 #[test]
 fn without_a_personal_config_rip_creates_the_default() {
@@ -221,6 +272,7 @@ printf '[qobuz]\n# from rip\nquality = 3\n' > "$2""#,
     assert_eq!(*get(&parse(&s.config), "qobuz", "quality"), 2.into());
 }
 
+/// A failing `rip` is an error that quotes its stderr, and leaves no file.
 #[cfg(unix)]
 #[test]
 fn rip_failing_to_create_the_default_is_an_error() {
@@ -237,6 +289,7 @@ fn rip_failing_to_create_the_default_is_an_error() {
     assert!(!s.config.exists());
 }
 
+/// A file `rip` half wrote is removed, so the next render seeds again.
 #[cfg(unix)]
 #[test]
 fn half_written_default_is_removed_so_the_next_render_reseeds() {
