@@ -29,6 +29,8 @@ Two agreed comment style guides in the repo: `docs/style/comments.md` (code-agno
 - [Enforcing the style with lints](issues/05-enforcement.md): the full Tooling-table lint set is on at `warn` in `[workspace.lints]`, with `check-private-items = true`, and `needless_return` is the only lint allowed. Test code allows `missing_panics_doc` on `mod tests` / `tests/*.rs`, now in the guide. `dev/check.sh` denies warnings and adds an awk check for column 80 and divider shape. There's no CI. 399 warnings at switch-on, 0 in `command.rs`.
 - [Slicing the rollout](issues/06-rollout-slicing.md): eight topic-group tickets, 07–14, each a `src` module with its `tests/*.rs` file. They run bottom-up in sequence (each blocked by the one before) and end with the GUI. Big files are documented as they are and flagged for a later split if needed. `AGENTS.md` now points at the guides and `dev/check.sh`. A ticket is done when its files have no clippy, rustdoc or `comments` hits and it passes a Standards review.
 
+- [GUI tabs, the last rollout ticket](issues/14-gui-tabs.md): `download_tab.rs`, `upload_tab.rs` and `settings_tab.rs` are converted, and `dev/check.sh` now passes in full across the workspace. The rollout (tickets 07–14) is done. Leftover code smells and glossary gaps are listed in tickets 13 and 14.
+
 ## Not yet specified
 
 - How the guides stay alive after rollout: whether `/code-review`'s Standards axis should cite them, and whether new-file templates or snippets are worth having. Sharpens once enforcement is decided.

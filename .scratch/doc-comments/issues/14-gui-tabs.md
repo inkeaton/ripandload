@@ -1,7 +1,7 @@
 # 14 – Apply the comment style: GUI tabs
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 13
 
 Part of `../map.md`. Slicing decided in `06-rollout-slicing.md`.
@@ -27,15 +27,23 @@ The last rollout ticket: once it's done, `dev/check.sh` must pass in full, not j
 
 ## Acceptance
 
-- [ ] No clippy warnings in these files:
+- [x] No clippy warnings in these files:
   `cargo clippy --workspace --all-targets --message-format=short 2>&1 | grep -E '^(crates/ripandload/src/download_tab\.rs|crates/ripandload/src/upload_tab\.rs|crates/ripandload/src/settings_tab\.rs):'` prints nothing.
-- [ ] No rustdoc warnings in these files:
+- [x] No rustdoc warnings in these files:
   `cargo doc --workspace --no-deps --document-private-items --message-format=short 2>&1 | grep -E '^(crates/ripandload/src/download_tab\.rs|crates/ripandload/src/upload_tab\.rs|crates/ripandload/src/settings_tab\.rs):'` prints nothing.
-- [ ] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
-- [ ] `cargo fmt --all --check` and `cargo test --workspace` pass.
-- [ ] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
+- [x] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
+- [x] `cargo fmt --all --check` and `cargo test --workspace` pass.
+- [x] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
 
 ## Notes
 
 - Big files are documented as they are. If a file still reads badly with dividers, say so under Comments as a candidate for a later split; don't split it here.
 - Other files' warnings are out of scope. `dev/check.sh` stays red until ticket 14 is done.
+
+## Comments
+
+- Done: `dev/check.sh` passes in full (fmt, clippy, rustdoc, tests, comments), warnings denied. This closes the rollout.
+- Step 2 had nothing to apply: none of the three files has a `mod tests`, and `crates/ripandload` has no `tests/`.
+- Glossary gaps: none new. "run" (`job_running` in code, where the glossary lists "job" under _Avoid_), "Check tools", "Test connection", "Compare with Server" and "active Server" are still without entries (see ticket 13). "lookup" is used for the act of fetching a Preview, which the glossary only forbids as a synonym for Preview itself.
+- No splits needed. `download_tab.rs`: Public API (form, `Action`, `show`), Previews, Quality picker, Helpers, Internal types (`Finished`, `PreviewState`). `upload_tab.rs`: Staging scan, The Upload tab, Wording (the public `plural`, which `app.rs` also uses), Album folders, Helpers, Internal types (`LastScan`). `settings_tab.rs`: Public API, Form sections, Widgets (`rip_executable` moved here), Helpers (`adopt_distro`).
+- Code smells, not fixed here (comments only): `fn groups` shares its name with its parameter; `type Finished` is a tuple that wants to be a struct; `preview_state` re-derives the Source its caller already knows; "Browse… then `adopt_distro`" repeats three times in `settings_tab.rs`, as does the empty-means-default text-field logic (`rip_executable`, `optional_text`); `rip_executable` takes all of `Settings` to edit one field, and its noun name hides that it draws a widget.

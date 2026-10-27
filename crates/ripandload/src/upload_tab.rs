@@ -1,5 +1,20 @@
 //! The Upload tab: where the Staging folder goes, what's in it, and what of
 //! that is already on the Server.
+//!
+//! The tab shows the active Server, the Staging folder and its music file
+//! count, and the last Comparison, if one was made of this Staging folder.
+//! Under the buttons it lists the Album folders and the single tracks,
+//! those with something left to upload first.
+//!
+//! Reading the Staging folder walks it on disk, so [`StagingScan`] keeps
+//! the last read and reads again only every [`RESCAN_INTERVAL`], or when
+//! told the folder has changed.
+//!
+//! The tab doesn't start anything. [`show`] reports what the user clicked as
+//! an [`Action`], and [`RipAndLoadApp`] starts the Upload or Compare with
+//! Server, or asks before clearing the Staging folder.
+//!
+//! [`RipAndLoadApp`]: crate::app::RipAndLoadApp
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -9,24 +24,37 @@ use ripandload_core::error::error_chain;
 use ripandload_core::settings::Server;
 use ripandload_core::staging::{Comparison, MusicGroup, StagingContents};
 
-/// How often to rescan the Staging folder while the Upload tab is open.
+// == Staging scan =============================================================
+
+/// How often the Staging folder is read again while the Upload tab is open.
 const RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 
-/// What's in the Staging folder, read again now and then rather than every frame.
+/// What's in the Staging folder, read again now and then, not every frame.
+///
+/// Its default has read nothing yet.
 #[derive(Debug, Default)]
 pub struct StagingScan {
+    /// The last read; `None` before the first and after
+    /// [`StagingScan::invalidate`].
     last: Option<LastScan>,
 }
 
-#[derive(Debug)]
-struct LastScan {
-    folder: PathBuf,
-    at: Instant,
-    contents: Result<StagingContents, String>,
-}
-
 impl StagingScan {
-    /// What's in `folder`, read again if the last read is stale or of another folder.
+    /// Returns what's in `folder`, read again if the last read is stale.
+    ///
+    /// A read is stale once it's [`RESCAN_INTERVAL`] old, or if it was of
+    /// another folder. A failed read is kept just as long, so the tab
+    /// doesn't retry it every frame.
+    ///
+    /// # Errors
+    ///
+    /// - The error chain of the error from [`StagingContents::read`], as text,
+    ///   if `folder` couldn't be listed.
+    ///
+    /// # Panics
+    ///
+    /// Doesn't panic: its one `expect` is reached only after `last` has been
+    /// set.
     pub fn get(&mut self, folder: &Path) -> Result<&StagingContents, &str> {
         let fresh = self
             .last
@@ -43,21 +71,52 @@ impl StagingScan {
         last.contents.as_ref().map_err(String::as_str)
     }
 
-    /// Forgets the scan, e.g. after a Download, an Upload or a Clear.
+    /// Forgets the last read, so the next [`StagingScan::get`] reads again.
+    ///
+    /// The app calls it after anything that changes the Staging folder: a
+    /// Download, an Upload or a Clear.
     pub fn invalidate(&mut self) {
         self.last = None;
     }
 }
 
-/// What the user asked for this frame.
+// == The Upload tab ===========================================================
+
+/// What the user clicked in the Upload tab this frame.
 pub enum Action {
+    /// Nothing to start.
     None,
+    /// Start an Upload of the Staging folder to the active Server.
     Upload,
+    /// Start Compare with Server.
     Compare,
+    /// Cancel the current run.
     Cancel,
+    /// Ask whether to clear the Staging folder.
     Clear,
 }
 
+/// Draws the Upload tab into `ui` and returns what the user clicked.
+///
+/// Upload and Compare with Server are enabled only when no run is going and
+/// the active Server has a host and a music folder. Clear… is enabled
+/// whenever no run is going, and Cancel only while one is.
+///
+/// # Arguments
+///
+/// - `ui`: where the tab is drawn.
+/// - `server`: the active Server, or `None` if there's none.
+/// - `staging_folder`: the Staging folder, from Settings.
+/// - `scan`: the last read of the Staging folder, read again when stale.
+/// - `comparison`: the last Comparison, if any. One made of another Staging
+///   folder is ignored.
+/// - `job_running`: whether a run is going.
+///
+/// # Returns
+///
+/// [`Action::Upload`], [`Action::Compare`], [`Action::Cancel`] or
+/// [`Action::Clear`] if the user clicked that button this frame, otherwise
+/// [`Action::None`].
 pub fn show(
     ui: &mut egui::Ui,
     server: Option<&Server>,
@@ -157,8 +216,39 @@ pub fn show(
     action
 }
 
-/// One row per album, playlist or "Single tracks", the ones with something
-/// to upload first.
+// == Wording ==================================================================
+
+/// Returns `count` and `what`, with an "s" unless `count` is 1.
+///
+/// The app uses it too, for the "clear Staging folder?" dialog.
+///
+/// # Format
+///
+/// ```text
+/// 1 music file
+/// 3 music files
+/// ```
+pub fn plural(count: usize, what: &str) -> String {
+    match count {
+        1 => format!("1 {what}"),
+        n => format!("{n} {what}s"),
+    }
+}
+
+// == Album folders ============================================================
+
+/// Draws one row per Album folder, plus "Single tracks", into `ui`.
+///
+/// The rows with something left to upload come first. Without a Comparison
+/// each row shows its music file count instead.
+///
+/// # Arguments
+///
+/// - `ui`: where the rows are drawn.
+/// - `groups`: the Staging folder's music, one group per Album folder and
+///   one for the single tracks.
+/// - `comparison`: the Comparison of this Staging folder, or `None` if it
+///   hasn't been compared.
 fn groups(ui: &mut egui::Ui, groups: &[MusicGroup], comparison: Option<&Comparison>) {
     let to_upload = |group: &MusicGroup| match comparison {
         Some(comparison) => comparison.to_upload(group.files.iter().map(PathBuf::as_path)),
@@ -198,7 +288,10 @@ fn groups(ui: &mut egui::Ui, groups: &[MusicGroup], comparison: Option<&Comparis
         });
 }
 
-/// `ACDC / Back in Black (1980)`, or "Single tracks" for the loose ones.
+/// Returns `group`'s row title, or "Single tracks" for the single tracks.
+///
+/// The title is the Album folder's path inside the Staging folder, with
+/// ` / ` between folders: `ACDC / Back in Black (1980)`.
 fn group_label(group: &MusicGroup) -> String {
     match &group.folder {
         Some(folder) => folder
@@ -210,15 +303,17 @@ fn group_label(group: &MusicGroup) -> String {
     }
 }
 
-/// "1 music file", "3 music files".
-pub fn plural(count: usize, what: &str) -> String {
-    match count {
-        1 => format!("1 {what}"),
-        n => format!("{n} {what}s"),
-    }
-}
+// == Helpers ==================================================================
 
-/// "just now", "5 min ago", "2 h ago".
+/// Returns how long ago `at` was, rounded down.
+///
+/// # Format
+///
+/// ```text
+/// just now
+/// 5 min ago
+/// 2 h ago
+/// ```
 fn ago(at: Instant) -> String {
     match at.elapsed().as_secs() / 60 {
         0 => "just now".to_owned(),
@@ -227,7 +322,9 @@ fn ago(at: Instant) -> String {
     }
 }
 
-/// `user@host:/music/folder (port 22)`.
+/// Returns `server` as `user@host:/music/folder (port 22)`.
+///
+/// Without a user, it starts at the host: `host:/music/folder (port 22)`.
 fn server_label(server: &Server) -> String {
     format!(
         "{}:{} (port {})",
@@ -235,4 +332,17 @@ fn server_label(server: &Server) -> String {
         server.music_folder,
         server.port
     )
+}
+
+// == Internal types ===========================================================
+
+/// One read of the Staging folder.
+#[derive(Debug)]
+struct LastScan {
+    /// The folder that was read.
+    folder: PathBuf,
+    /// When it was read.
+    at: Instant,
+    /// What was in it, or the error chain of why it couldn't be read.
+    contents: Result<StagingContents, String>,
 }
