@@ -24,6 +24,8 @@ use ripandload_core::error::error_chain;
 use ripandload_core::settings::Server;
 use ripandload_core::staging::{Comparison, MusicGroup, StagingContents};
 
+use crate::wording::{ago, plural};
+
 // == Staging scan =============================================================
 
 /// How often the Staging folder is read again while the Upload tab is open.
@@ -211,28 +213,9 @@ pub fn show(
         && !contents.groups.is_empty()
     {
         ui.add_space(8.0);
-        groups(ui, &contents.groups, comparison);
+        album_folder_rows(ui, &contents.groups, comparison);
     }
     action
-}
-
-// == Wording ==================================================================
-
-/// Returns `count` and `what`, with an "s" unless `count` is 1.
-///
-/// The app uses it too, for the "clear Staging folder?" dialog.
-///
-/// # Format
-///
-/// ```text
-/// 1 music file
-/// 3 music files
-/// ```
-pub fn plural(count: usize, what: &str) -> String {
-    match count {
-        1 => format!("1 {what}"),
-        n => format!("{n} {what}s"),
-    }
 }
 
 // == Album folders ============================================================
@@ -249,7 +232,7 @@ pub fn plural(count: usize, what: &str) -> String {
 ///   one for the single tracks.
 /// - `comparison`: the Comparison of this Staging folder, or `None` if it
 ///   hasn't been compared.
-fn groups(ui: &mut egui::Ui, groups: &[MusicGroup], comparison: Option<&Comparison>) {
+fn album_folder_rows(ui: &mut egui::Ui, groups: &[MusicGroup], comparison: Option<&Comparison>) {
     let to_upload = |group: &MusicGroup| match comparison {
         Some(comparison) => comparison.to_upload(group.files.iter().map(PathBuf::as_path)),
         None => 0,
@@ -304,23 +287,6 @@ fn group_label(group: &MusicGroup) -> String {
 }
 
 // == Helpers ==================================================================
-
-/// Returns how long ago `at` was, rounded down.
-///
-/// # Format
-///
-/// ```text
-/// just now
-/// 5 min ago
-/// 2 h ago
-/// ```
-fn ago(at: Instant) -> String {
-    match at.elapsed().as_secs() / 60 {
-        0 => "just now".to_owned(),
-        minutes @ 1..60 => format!("{minutes} min ago"),
-        minutes => format!("{} h ago", minutes / 60),
-    }
-}
 
 /// Returns `server` as `user@host:/music/folder (port 22)`.
 ///

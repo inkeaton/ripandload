@@ -248,6 +248,8 @@ fn template_field(ui: &mut egui::Ui, template: &mut String, placeholders: &[&str
 /// Draws a field editing `rip`'s path in `settings` into `ui`.
 ///
 /// An empty or all-whitespace field means no path, so the default is used.
+/// A path that isn't valid UTF-8 is shown read-only, since editing its text
+/// would rewrite it.
 ///
 /// # Arguments
 ///
@@ -255,6 +257,14 @@ fn template_field(ui: &mut egui::Ui, template: &mut String, placeholders: &[&str
 /// - `settings`: the Settings whose `rip_executable` the field edits.
 /// - `hint`: the default, shown while the field is empty.
 fn rip_executable(ui: &mut egui::Ui, settings: &mut Settings, hint: &str) {
+    if let Some(path) = settings
+        .rip_executable
+        .as_ref()
+        .filter(|path| path.to_str().is_none())
+    {
+        read_only_path(ui, path);
+        return;
+    }
     let mut text = settings
         .rip_executable
         .as_ref()
@@ -269,7 +279,14 @@ fn rip_executable(ui: &mut egui::Ui, settings: &mut Settings, hint: &str) {
 }
 
 /// Draws a field editing `path` into `ui`, showing `hint` while it's empty.
+///
+/// A path that isn't valid UTF-8 is shown read-only, since editing its text
+/// would rewrite it. Browse… can still replace it.
 fn path_field(ui: &mut egui::Ui, path: &mut PathBuf, hint: &str) {
+    if path.to_str().is_none() {
+        read_only_path(ui, path);
+        return;
+    }
     let mut text = path.display().to_string();
     if ui
         .add(egui::TextEdit::singleline(&mut text).hint_text(hint))
@@ -277,6 +294,15 @@ fn path_field(ui: &mut egui::Ui, path: &mut PathBuf, hint: &str) {
     {
         *path = PathBuf::from(text);
     }
+}
+
+/// Draws `path` into `ui` as text that can't be edited.
+///
+/// For a path that isn't valid UTF-8, shown with the characters it lacks
+/// replaced.
+fn read_only_path(ui: &mut egui::Ui, path: &Path) {
+    let mut text = path.to_string_lossy().into_owned();
+    ui.add(egui::TextEdit::singleline(&mut text).interactive(false));
 }
 
 /// Draws a field editing `value` into `ui`, showing `hint` while it's empty.

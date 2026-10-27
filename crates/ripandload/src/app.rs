@@ -30,7 +30,8 @@ use ripandload_core::tool_env::ToolEnv;
 
 use crate::download_tab::{self, DownloadForm};
 use crate::settings_tab;
-use crate::upload_tab::{self, StagingScan, plural};
+use crate::upload_tab::{self, StagingScan};
+use crate::wording::plural;
 
 /// How often the window repaints while a run is going, to show new output.
 const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);

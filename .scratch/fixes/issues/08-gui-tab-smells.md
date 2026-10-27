@@ -1,6 +1,6 @@
 # 08 – GUI tab smells
 
-Status: ready-for-agent
+Status: done
 Blocked by: 06
 
 Part of `../spec.md`. First noted in `../../doc-comments/issues/14-gui-tabs.md`. Blocked by 06 because both edit the GUI crate's tabs and `app.rs`.
@@ -18,3 +18,7 @@ Out of this ticket: `rip_executable` taking all of `Settings` and the repeated B
 - [ ] `wording.rs` has unit tests for `plural` and `ago`.
 - [ ] Checked by hand on Linux with a non-UTF-8 folder name if practical; otherwise say so under Comments.
 - [ ] `dev/check.sh` passes.
+
+## Comments
+
+Not checked by hand with a non-UTF-8 folder name: the session has no display. `path_field` and `rip_executable` return to a read-only `read_only_path` when `to_str` is `None`; Browse… is drawn outside them, so it still works.
