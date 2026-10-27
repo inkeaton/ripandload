@@ -22,6 +22,7 @@ Bugs first, then smells. Tickets that touch the same file run in sequence (`Bloc
 | 12 Core `start`: one way to start a Run | new `start.rs`, `run.rs`, `error.rs`, `tests/run.rs`, `tests/ssh_target.rs` | 11 |
 | 13 The app starts Runs through `start` | `app.rs`, `upload_tab.rs`, `settings_tab.rs`, `run.rs` | 12 |
 | 14 The Run hands over its Outcome | `process.rs`, `run.rs`, `start.rs`, `error.rs`, `app.rs`, tests | 13 |
+| 15 Each kind of Run in its own file | `run.rs`, new `run/*.rs`, `start.rs` | 14 |
 
 ## Standing rules
 

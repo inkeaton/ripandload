@@ -21,10 +21,11 @@ Each of the seven deepening candidates from the architecture review of 2026-10-2
 - **01 Glossary and run naming**: "Run" is the umbrella term; ten glossary entries added. Core `JobRun`/`Job` become `Run`/`Process`, GUI `job_*` become `*run*`, via fix 11, which blocks every later implementation ticket. See `issues/01-glossary-and-run-naming.md`.
 - **02 Run start-up**: new core `start(&Settings, Request, &Places, &mut Log) -> Result<Run, CantStart>`; every pre-spawn failure is a `CantStart` (Log cleared, `✗` line, status bar); one `server()` readiness check shared with the GUI; `Run` gets one crate-private constructor. Fix 12 (core) then 13 (app). See `issues/02-run-start-up.md`.
 - **03 Comparison as the Run's outcome**: `start` snapshots the Staging folder (unreadable → `CantStart::Staging`); the Run hands over `Outcome { Downloaded, Compared(c), Uploaded(c), Nothing }` once via `take_outcome`; `is_download`/`upload_succeeded`/`to_send` go; the clear offer stays in the app; `process::Outcome` → `Exit`. Fix 14. See `issues/03-comparison-as-run-outcome.md`.
+- **04 Per-kind Runs**: crate-private `trait Kind` (`Box<dyn Kind>`), one file per kind under `run/`; kinds return `Note { Line, Problem }` and never touch the Log; they build their own commands; `Run` keeps the queue, polling, Cancel, Log writing and WSL-wide hints. Fix 15. See `issues/04-per-kind-run-handlers.md`.
 
 ## Not yet specified
 
-- How the per-kind handlers (candidate 2) and typed log lines (candidate 7) meet: whether a kind of run produces typed log lines itself. Sharpens once candidate 2 has a shape.
+- How typed log lines (candidate 7) meet the per-kind `Note`s of ticket 04: whether `Note` widens into the log line type.
 - Whether, once candidates 1–3 land, `app.rs` is small enough to need no split, or whether its frame drawing (`ui()`) wants its own module.
 
 ## Out of scope
