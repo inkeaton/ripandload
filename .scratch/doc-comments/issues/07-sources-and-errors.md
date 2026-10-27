@@ -1,7 +1,7 @@
 # 07 – Apply the comment style: Sources and errors
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 06
 
 Part of `../map.md`. Slicing decided in `06-rollout-slicing.md`.
@@ -26,15 +26,26 @@ Comments only. Code changes are limited to pure moves of items into their sectio
 
 ## Acceptance
 
-- [ ] No clippy warnings in these files:
+- [x] No clippy warnings in these files:
   `cargo clippy --workspace --all-targets --message-format=short 2>&1 | grep -E '^(crates/ripandload-core/src/source\.rs|crates/ripandload-core/src/error\.rs):'` prints nothing.
-- [ ] No rustdoc warnings in these files:
+- [x] No rustdoc warnings in these files:
   `cargo doc --workspace --no-deps --document-private-items --message-format=short 2>&1 | grep -E '^(crates/ripandload-core/src/source\.rs|crates/ripandload-core/src/error\.rs):'` prints nothing.
-- [ ] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
-- [ ] `cargo fmt --all --check` and `cargo test --workspace` pass.
-- [ ] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
+- [x] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
+- [x] `cargo fmt --all --check` and `cargo test --workspace` pass.
+- [x] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
 
 ## Notes
 
 - Big files are documented as they are. If a file still reads badly with dividers, say so under Comments as a candidate for a later split; don't split it here.
 - Other files' warnings are out of scope. `dev/check.sh` stays red until ticket 14 is done.
+
+## Comments
+
+- Glossary gaps: "status line" (the one-line message area the GUI shows errors in) and "personal streamrip config" (the user's own streamrip config, which the Streamrip config entry contrasts with but doesn't name) are used in doc prose and aren't glossary terms. "Job" is a code type (`job::Job`) whose name clashes with the _Avoid_ list under Download; docs link it rather than use it as a domain word.
+- `clippy.toml` gained `doc-valid-idents = ["SoundCloud", ".."]` (separate commit), since `doc_markdown` takes the Source name for code. Later tickets get it too.
+- Field reflows in `error.rs` (`Serialize(...)`, `Refused { ... }` and the like) are rustfmt's layout once a `///` sits on the field. No tokens changed.
+- Later-split / follow-up candidates, out of this ticket's comments-only scope:
+  - `quality_choices` hard-codes the levels Qobuz and Deezer share. Its doc, the comment and the code all repeat facts from `quality_levels` and `quality_label`; computing the intersection would remove that.
+  - The test fixture `source(url)` in `source.rs` reads like the `Source` type; `source_of` would be clearer.
+  - `StreamripConfigError::Tool`'s message says "couldn't create a default Streamrip config", but the variant is also raised when the Staging folder or a database path can't be converted for WSL.
+- Neither file needs a split.

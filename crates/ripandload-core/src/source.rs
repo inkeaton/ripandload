@@ -1,22 +1,52 @@
 //! The Sources the app downloads from, and their Quality levels.
+//!
+//! A pasted URL is matched to its [`Source`] by its host alone. Each Source
+//! has its own Quality levels, numbered as streamrip numbers them, and
+//! [`quality_choices`] works out which of them a Download that mixes Sources
+//! can still offer.
+//!
+//! This module doesn't look inside a URL's path. Finding out whether it
+//! names an album, a track or a playlist is the Preview's job, in
+//! [`preview`].
+//!
+//! [`preview`]: crate::preview
 
 use std::fmt;
 use std::ops::RangeInclusive;
 
-/// A Source the app has Credentials for. (Tidal and SoundCloud are for later.)
+// == Sources ==================================================================
+
+/// A Source the app can download from.
+///
+/// Only the Sources the app has Credentials for, so Tidal and SoundCloud
+/// aren't among them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    /// Qobuz, reached with a user ID and auth token.
     Qobuz,
+    /// Deezer, reached with an ARL.
     Deezer,
 }
 
 impl Source {
-    /// Which Source a pasted URL belongs to, by its host:
-    /// `qobuz.com` or a subdomain (`open.`, `play.`, `www.`), `deezer.com` or a
-    /// subdomain, and Deezer's share links on `deezer.page.link` / `dzr.page.link`.
+    /// Returns the Source a pasted URL belongs to, judged by its host.
     ///
-    /// The URL needs an `http://` or `https://` scheme and something after the
-    /// host; scheme and host are case-insensitive. Anything else gives `None`.
+    /// The URL needs an `http://` or `https://` scheme and a path after the
+    /// host. Scheme and host are case-insensitive; the path isn't checked.
+    ///
+    /// # Arguments
+    ///
+    /// - `url`: the pasted URL. Leading whitespace isn't trimmed, so it gives
+    ///   `None`.
+    ///
+    /// # Returns
+    ///
+    /// - [`Source::Qobuz`] for `qobuz.com` or any of its subdomains (`open.`,
+    ///   `play.`, `www.`).
+    /// - [`Source::Deezer`] for `deezer.com` or any of its subdomains, and for
+    ///   Deezer's share links on `deezer.page.link` and `dzr.page.link`.
+    /// - `None` for any other host or scheme, or when the host isn't followed
+    ///   by a path longer than `/`.
     pub fn from_url(url: &str) -> Option<Source> {
         let (protocol, url) = url.split_once("://")?;
         if !protocol.eq_ignore_ascii_case("https") && !protocol.eq_ignore_ascii_case("http") {
@@ -46,7 +76,10 @@ impl Source {
         }
     }
 
-    /// streamrip's Quality levels for this Source.
+    /// Returns this Source's Quality levels, lowest first.
+    ///
+    /// The numbers are the ones streamrip's config and its `-q` option use.
+    /// [`Source::quality_label`] names each one.
     pub fn quality_levels(self) -> RangeInclusive<u8> {
         match self {
             // 1 = MP3 320, 2 = 16/44.1, 3 = 24/≤96, 4 = 24/>96.
@@ -56,6 +89,17 @@ impl Source {
         }
     }
 
+    /// Returns the label Settings show for one of this Source's Quality levels.
+    ///
+    /// # Arguments
+    ///
+    /// - `level`: a Quality level, numbered as streamrip numbers it for this
+    ///   Source.
+    ///
+    /// # Returns
+    ///
+    /// The label, e.g. `FLAC` or `MP3 320 kbps`, or `unknown` when `level`
+    /// isn't one of [`Source::quality_levels`].
     pub fn quality_label(self, level: u8) -> &'static str {
         match (self, level) {
             (Source::Qobuz, 1) => "MP3 320 kbps",
@@ -70,6 +114,7 @@ impl Source {
     }
 }
 
+/// Shows the Source's name as users know it, e.g. `Qobuz`.
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -79,11 +124,28 @@ impl fmt::Display for Source {
     }
 }
 
-/// The Quality levels a Download of `sources` can be overridden to, with labels.
+// == Quality choices ==========================================================
+
+/// Returns the Quality levels a Download of `sources` can be overridden to.
 ///
 /// streamrip's `-q` applies one level to every Source, and a level a Source
-/// doesn't have breaks its download. So a mixed Download only offers the levels
-/// all its Sources share, with labels that hold for each of them.
+/// doesn't have breaks that Source's part of the Download. So a Download
+/// that mixes Sources only offers the levels they all share, with labels
+/// that hold for each of them.
+///
+/// # Arguments
+///
+/// - `sources`: the Source of each pasted URL, in any order, repeats
+///   included.
+///
+/// # Returns
+///
+/// `(level, label)` pairs, lowest level first:
+///
+/// - every level of the Source, labeled by [`Source::quality_label`], when
+///   `sources` holds only one Source;
+/// - levels 1 (MP3 320) and 2 (16-bit FLAC) when it mixes Qobuz and Deezer;
+/// - nothing when `sources` is empty.
 pub fn quality_choices(sources: &[Source]) -> Vec<(u8, &'static str)> {
     let Some((&first, rest)) = sources.split_first() else {
         return Vec::new();
@@ -98,16 +160,23 @@ pub fn quality_choices(sources: &[Source]) -> Vec<(u8, &'static str)> {
     vec![(1, "MP3 320 kbps"), (2, "CD quality (16-bit FLAC)")]
 }
 
+// == Tests ====================================================================
+
 #[cfg(test)]
+#[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 mod tests {
     use super::*;
 
-    // --- from_url ---------------------------------------------------------
+    // == Fixtures =============================================================
 
+    /// Returns the Source [`Source::from_url`] finds for `url`.
     fn source(url: &str) -> Option<Source> {
         Source::from_url(url)
     }
 
+    // == Matching URLs ========================================================
+
+    /// Qobuz URLs, on the bare domain or a subdomain, are Qobuz.
     #[test]
     fn qobuz_urls_are_qobuz() {
         for url in [
@@ -120,6 +189,7 @@ mod tests {
         }
     }
 
+    /// Deezer URLs, share links included, are Deezer.
     #[test]
     fn deezer_urls_are_deezer() {
         for url in [
@@ -132,6 +202,7 @@ mod tests {
         }
     }
 
+    /// An `http` scheme, and capitals in the scheme or host, still match.
     #[test]
     fn http_and_capitals_are_fine() {
         assert_eq!(source("http://open.qobuz.com/track/1"), Some(Source::Qobuz));
@@ -145,6 +216,7 @@ mod tests {
         );
     }
 
+    /// Tidal, SoundCloud and other sites give `None`.
     #[test]
     fn other_sources_are_none() {
         assert_eq!(source("https://tidal.com/browse/track/1"), None);
@@ -152,6 +224,7 @@ mod tests {
         assert_eq!(source("https://www.youtube.com/watch?v=abc"), None);
     }
 
+    /// A host that only contains a Source's domain gives `None`.
     #[test]
     fn lookalike_hosts_are_none() {
         assert_eq!(source("https://notqobuz.com/album/1"), None);
@@ -161,6 +234,7 @@ mod tests {
         assert_eq!(source("https://evil.page.link/abc"), None);
     }
 
+    /// A URL without an `http` or `https` scheme, or a path, gives `None`.
     #[test]
     fn urls_without_a_scheme_or_path_are_none() {
         assert_eq!(source("open.qobuz.com/album/1"), None);
@@ -172,8 +246,9 @@ mod tests {
         assert_eq!(source("not a url"), None);
     }
 
-    // --- quality_choices -----------------------------------------------------
+    // == Quality choices ======================================================
 
+    /// One Source, even repeated, offers all its own levels and labels.
     #[test]
     fn one_source_offers_its_own_levels_and_labels() {
         assert_eq!(
@@ -191,6 +266,7 @@ mod tests {
         );
     }
 
+    /// Mixed Sources, in any order, offer only the levels they share.
     #[test]
     fn mixed_sources_offer_only_the_shared_levels() {
         let expected = [(1, "MP3 320 kbps"), (2, "CD quality (16-bit FLAC)")];
@@ -201,6 +277,7 @@ mod tests {
         );
     }
 
+    /// No Sources offer no levels.
     #[test]
     fn no_sources_offer_nothing() {
         assert_eq!(quality_choices(&[]), []);

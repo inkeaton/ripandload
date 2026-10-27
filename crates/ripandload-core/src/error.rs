@@ -1,161 +1,319 @@
+//! The errors the core library returns, one enum per kind of operation.
+//!
+//! Each enum says why one kind of operation failed: loading Settings,
+//! running a tool, rendering the Streamrip config, and so on. Their messages
+//! are written for the status line: what went wrong and, where it helps,
+//! what the user can do about it. [`error_chain`] joins an error and its
+//! causes into the one line that the status line and the log file show.
+//!
+//! This module doesn't show errors anywhere. The GUI decides where each one
+//! goes.
+
 use std::path::PathBuf;
 
+// == Settings =================================================================
+
 /// Why Settings couldn't be loaded or saved.
+///
+/// Returned by [`Settings::load`] and [`Settings::save`].
+///
+/// [`Settings::load`]: crate::settings::Settings::load
+/// [`Settings::save`]: crate::settings::Settings::save
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
+    /// The Settings file exists but couldn't be read.
     #[error("couldn't read Settings from {path}")]
     Read {
+        /// The Settings file.
         path: PathBuf,
+        /// Why the OS couldn't read it.
         #[source]
         source: std::io::Error,
     },
 
+    /// The Settings file isn't TOML, or doesn't match the Settings layout.
     #[error("Settings file {path} isn't valid")]
     Parse {
+        /// The Settings file.
         path: PathBuf,
+        /// Where the TOML is wrong, and why.
+        ///
+        /// Its `Debug` holds the whole file, Credentials included, so show it
+        /// through [`error_chain`], never `Debug`.
         #[source]
         source: toml::de::Error,
     },
 
+    /// The Settings file, or its folder, couldn't be written.
     #[error("couldn't write Settings to {path}")]
     Write {
+        /// The Settings file.
         path: PathBuf,
+        /// Why the OS couldn't write it.
         #[source]
         source: std::io::Error,
     },
 
+    /// Settings couldn't be turned into TOML, before anything was written.
     #[error("couldn't turn Settings into TOML")]
-    Serialize(#[from] toml::ser::Error),
+    Serialize(
+        /// Why the TOML serializer gave up.
+        #[from]
+        toml::ser::Error,
+    ),
 }
 
-/// Why a `CommandSpec` couldn't be turned into a process to run.
+// == Tools ====================================================================
+
+/// Why a [`CommandSpec`] couldn't be turned into a process to run.
+///
+/// Returned while [`ToolEnv`] finds a tool or converts a path for it.
+///
+/// [`CommandSpec`]: crate::command::CommandSpec
+/// [`ToolEnv`]: crate::tool_env::ToolEnv
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
+    /// The tool's executable isn't on `PATH`.
     #[error("`{tool}` wasn't found on PATH; {hint}")]
     NotFound {
+        /// The executable's name, e.g. `rip`.
         tool: &'static str,
-        /// What the user can do about it.
+        /// What the user can do about it, e.g. `install rsync`.
         hint: &'static str,
+        /// Why the search for the executable failed.
         #[source]
         source: which::Error,
     },
 
+    /// A path the tools need is outside every drive and every WSL distro,
+    /// so the tools inside WSL can't open it.
     #[error("{path} can't be reached from WSL; use a folder on a drive like C: or inside WSL")]
-    NotReachableFromWsl { path: PathBuf },
+    NotReachableFromWsl {
+        /// The path, as Windows sees it.
+        path: PathBuf,
+    },
 
+    /// A path the tools need is inside a WSL distro other than theirs.
     #[error(
         "{path} is inside the {distro} distro, but the tools run in {tools_distro}; \
          set WSL distro in Settings to {distro}"
     )]
     OtherDistro {
+        /// The path, as Windows sees it.
         path: PathBuf,
+        /// The distro the path is inside.
         distro: String,
+        /// The distro the tools run in, from Settings.
         tools_distro: String,
     },
 }
 
-/// Why a job couldn't start.
+// == Jobs =====================================================================
+
+/// Why a [`Job`] couldn't start its process.
+///
+/// Returned by [`Job::spawn`] and [`Job::spawn_raw`].
+///
+/// [`Job`]: crate::job::Job
+/// [`Job::spawn`]: crate::job::Job::spawn
+/// [`Job::spawn_raw`]: crate::job::Job::spawn_raw
 #[derive(Debug, thiserror::Error)]
 pub enum JobError {
+    /// The OS refused to start the process.
     #[error("couldn't start {program}")]
     Spawn {
+        /// The program that was to run, as passed to the OS.
         program: String,
+        /// Why the OS refused.
         #[source]
         source: std::io::Error,
     },
 }
 
+// == Streamrip config =========================================================
+
 /// Why the Streamrip config couldn't be rendered.
+///
+/// Returned by [`streamrip_config::render`], which may first have to create
+/// the file, by copying the user's personal streamrip config or by running
+/// rip.
+///
+/// [`streamrip_config::render`]: crate::streamrip_config::render
 #[derive(Debug, thiserror::Error)]
 pub enum StreamripConfigError {
+    /// The Streamrip config, or the personal config it is copied from,
+    /// couldn't be read.
     #[error("couldn't read {path}")]
     Read {
+        /// The file that couldn't be read.
         path: PathBuf,
+        /// Why the OS couldn't read it.
         #[source]
         source: std::io::Error,
     },
 
+    /// The Streamrip config isn't valid TOML.
     #[error(
         "the Streamrip config {path} isn't valid TOML; fix it, or delete it \
          and the next Download makes a new one"
     )]
     Parse {
+        /// The Streamrip config.
         path: PathBuf,
+        /// Where the TOML is wrong, and why.
+        ///
+        /// It quotes the line with the mistake, which may hold Credentials,
+        /// so show it through [`error_chain`], never `Debug`.
         #[source]
         source: toml_edit::TomlError,
     },
 
+    /// The Streamrip config, or its folder, couldn't be written.
     #[error("couldn't write the Streamrip config to {path}")]
     Write {
+        /// The Streamrip config.
         path: PathBuf,
+        /// Why the OS couldn't write it.
         #[source]
         source: std::io::Error,
     },
 
+    /// A path in the Streamrip config couldn't be converted for the tools,
+    /// or rip couldn't be found to create a default Streamrip config.
+    ///
+    /// The paths are the Streamrip config's own, the Staging folder and
+    /// streamrip's databases. The message names only the default config.
     #[error("couldn't create a default Streamrip config")]
-    Tool(#[from] ToolError),
+    Tool(
+        /// Why the path couldn't be converted, or rip couldn't be found.
+        #[from]
+        ToolError,
+    ),
 
+    /// rip was found but couldn't be started to create a default Streamrip
+    /// config.
     #[error("couldn't start rip to create a default Streamrip config")]
     SeedSpawn {
+        /// Why the OS refused to start it.
         #[source]
         source: std::io::Error,
     },
 
+    /// rip ran but didn't create a default Streamrip config.
     #[error("rip didn't create a default Streamrip config at {path}: {output}")]
-    SeedFailed { path: PathBuf, output: String },
+    SeedFailed {
+        /// Where rip was asked to create the Streamrip config.
+        path: PathBuf,
+        /// rip's stderr, trimmed, or its exit status when stderr was empty.
+        output: String,
+    },
 }
 
-/// Why the Staging folder couldn't be counted or cleared.
+// == Staging folder ===========================================================
+
+/// Why the Staging folder couldn't be read, counted or cleared.
+///
+/// Returned by [`StagingContents::read`], [`staging::music_groups`],
+/// [`staging::count_files`] and [`staging::clear`].
+///
+/// [`StagingContents::read`]: crate::staging::StagingContents::read
+/// [`staging::music_groups`]: crate::staging::music_groups
+/// [`staging::count_files`]: crate::staging::count_files
+/// [`staging::clear`]: crate::staging::clear
 #[derive(Debug, thiserror::Error)]
 pub enum StagingError {
+    /// A folder in the Staging folder, or the Staging folder itself,
+    /// couldn't be listed.
     #[error("couldn't read {path}")]
     Read {
+        /// The folder that couldn't be listed.
         path: PathBuf,
+        /// Why the OS couldn't list it.
         #[source]
         source: std::io::Error,
     },
 
+    /// A file or folder inside the Staging folder couldn't be deleted.
     #[error("couldn't delete {path}")]
     Remove {
+        /// The file or folder that couldn't be deleted.
         path: PathBuf,
+        /// Why the OS couldn't delete it.
         #[source]
         source: std::io::Error,
     },
 
+    /// Clearing was refused, since the Staging folder is set to a filesystem
+    /// root or the home folder, most likely by mistake.
     #[error("won't clear {path}: it looks like the wrong Staging folder")]
-    Refused { path: PathBuf },
+    Refused {
+        /// The folder that was to be cleared.
+        path: PathBuf,
+    },
 }
 
-/// Why a pasted URL has no Preview. None of these stop a Download.
+// == Previews =================================================================
+
+/// Why a pasted URL has no Preview.
+///
+/// None of these stop a Download: a Preview is only information. Returned
+/// by [`preview::fetch`].
+///
+/// [`preview::fetch`]: crate::preview::fetch
 #[derive(Debug, thiserror::Error)]
 pub enum PreviewError {
+    /// The URL isn't a Qobuz or Deezer album, track, playlist or artist
+    /// link, nor a Deezer share link.
     #[error("no preview for this kind of URL")]
     Unsupported,
 
+    /// A Deezer share link led somewhere other than a Deezer album, track,
+    /// playlist or artist.
     #[error("the share link didn't lead to a Deezer album, track, playlist or artist")]
     UnreadableShareLink,
 
+    /// The Qobuz app ID isn't known yet. It is read from the Streamrip
+    /// config, which streamrip fills in on the first Qobuz Download.
     #[error("no preview until the first Qobuz Download")]
     NoQobuzAppId,
 
+    /// Settings have no Qobuz auth token.
     #[error("no preview without a Qobuz auth token in Settings")]
     NoQobuzToken,
 
+    /// A request to the Source failed, or its answer couldn't be read.
     #[error("couldn't ask {from}")]
     Request {
+        /// The Source that was asked.
         from: crate::source::Source,
+        /// Why the request failed, boxed to keep [`PreviewError`] small.
         #[source]
         err: Box<ureq::Error>,
     },
 
+    /// The Source's answer couldn't be turned into a Preview.
+    ///
+    /// It wasn't JSON, was an error sent as JSON (as Deezer does), or lacked
+    /// a name the Preview needs, such as the artist's.
     #[error("{from} didn't answer with a name")]
-    Unexpected { from: crate::source::Source },
+    Unexpected {
+        /// The Source that answered.
+        from: crate::source::Source,
+    },
 }
 
-/// "outer error: inner cause: …", since `Display` shows only the outer message.
-/// Made for the status line, so OS error codes are dropped. Also what goes in
-/// the log file: a TOML error's `Debug` holds the whole file, Credentials
-/// included, and its `Display` quotes the line with the mistake.
+// == Error chains =============================================================
+
+/// Returns `err` and its causes on one line: `outer: cause: inner cause`.
+///
+/// `Display` shows only the outer message, so the status line and the log
+/// file use this instead. Each message is cleaned up for the status line:
+/// OS error codes, trailing full stops and the code snippet of a TOML error
+/// are dropped.
+///
+/// Errors go into the log file this way too, never through `Debug`: a TOML
+/// error's `Debug` holds the whole file, Credentials included, and its
+/// snippet quotes the line with the mistake.
 pub fn error_chain(err: &dyn std::error::Error) -> String {
     let mut text = readable(err);
     let mut source = err.source();
@@ -167,9 +325,14 @@ pub fn error_chain(err: &dyn std::error::Error) -> String {
     text
 }
 
-/// One error's message on one line, without the " (os error 13)" that
-/// `io::Error` adds. Windows messages end in a full stop, which would sit
-/// oddly before ": ".
+// == Message cleanup ==========================================================
+
+/// Returns `err`'s own message on one line, cleaned up for the status line.
+///
+/// Drops the ` (os error 13)` that `io::Error` adds, the lines of a TOML
+/// error's code snippet, and a trailing full stop, which Windows messages end
+/// in and which would sit oddly before `: `. The lines left are trimmed and
+/// joined with `; `.
 fn readable(err: &dyn std::error::Error) -> String {
     let text = err.to_string();
     let text = match text.rfind(" (os error ") {
@@ -185,18 +348,24 @@ fn readable(err: &dyn std::error::Error) -> String {
         .to_owned()
 }
 
-/// The `|`, `1 | key = ` and `|  ^` lines a TOML parse error uses to point at
-/// the mistake, which only make sense laid out over several lines.
+/// Returns whether `line` belongs to a TOML error's code snippet.
+///
+/// The snippet is the `|`, `1 | key = ` and `|  ^` lines that point at the
+/// mistake. They only make sense laid out over several lines.
 fn is_code_snippet(line: &str) -> bool {
     line.trim_start_matches(|c: char| c.is_ascii_digit())
         .trim_start()
         .starts_with('|')
 }
 
+// == Tests ====================================================================
+
 #[cfg(test)]
+#[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 mod tests {
     use super::*;
 
+    /// The ` (os error 13)` an `io::Error` adds is dropped.
     #[test]
     fn error_chain_drops_os_error_codes() {
         let err = StagingError::Read {
@@ -210,6 +379,7 @@ mod tests {
         assert!(!text.contains("os error"), "{text}");
     }
 
+    /// A TOML parse error keeps its line and reason, without the snippet.
     #[test]
     fn error_chain_puts_a_toml_parse_error_on_one_line() {
         let source = toml::from_str::<toml::Table>("staging_folder = \n").unwrap_err();
@@ -226,6 +396,7 @@ mod tests {
         assert!(!text.contains('|'), "the code snippet is left out: {text}");
     }
 
+    /// The file line a TOML error quotes, Credentials and all, is left out.
     #[test]
     fn error_chain_leaves_out_the_line_a_toml_error_points_at() {
         let source = toml::from_str::<toml::Table>("auth_token = \"s3cret\" oops\n").unwrap_err();
