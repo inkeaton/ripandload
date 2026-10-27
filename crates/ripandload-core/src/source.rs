@@ -170,7 +170,7 @@ mod tests {
     // == Fixtures =============================================================
 
     /// Returns the Source [`Source::from_url`] finds for `url`.
-    fn source(url: &str) -> Option<Source> {
+    fn source_of(url: &str) -> Option<Source> {
         Source::from_url(url)
     }
 
@@ -185,7 +185,7 @@ mod tests {
             "https://www.qobuz.com/us-en/album/some-name/abc123",
             "https://qobuz.com/album/1",
         ] {
-            assert_eq!(source(url), Some(Source::Qobuz), "{url}");
+            assert_eq!(source_of(url), Some(Source::Qobuz), "{url}");
         }
     }
 
@@ -198,20 +198,23 @@ mod tests {
             "https://deezer.page.link/urTH8Hw8bvwmJECH6",
             "https://dzr.page.link/abc123",
         ] {
-            assert_eq!(source(url), Some(Source::Deezer), "{url}");
+            assert_eq!(source_of(url), Some(Source::Deezer), "{url}");
         }
     }
 
     /// An `http` scheme, and capitals in the scheme or host, still match.
     #[test]
     fn http_and_capitals_are_fine() {
-        assert_eq!(source("http://open.qobuz.com/track/1"), Some(Source::Qobuz));
         assert_eq!(
-            source("HTTPS://Open.Qobuz.COM/track/1"),
+            source_of("http://open.qobuz.com/track/1"),
             Some(Source::Qobuz)
         );
         assert_eq!(
-            source("https://WWW.DEEZER.COM/track/1"),
+            source_of("HTTPS://Open.Qobuz.COM/track/1"),
+            Some(Source::Qobuz)
+        );
+        assert_eq!(
+            source_of("https://WWW.DEEZER.COM/track/1"),
             Some(Source::Deezer)
         );
     }
@@ -219,31 +222,34 @@ mod tests {
     /// Tidal, SoundCloud and other sites give `None`.
     #[test]
     fn other_sources_are_none() {
-        assert_eq!(source("https://tidal.com/browse/track/1"), None);
-        assert_eq!(source("https://soundcloud.com/artist/track"), None);
-        assert_eq!(source("https://www.youtube.com/watch?v=abc"), None);
+        assert_eq!(source_of("https://tidal.com/browse/track/1"), None);
+        assert_eq!(source_of("https://soundcloud.com/artist/track"), None);
+        assert_eq!(source_of("https://www.youtube.com/watch?v=abc"), None);
     }
 
     /// A host that only contains a Source's domain gives `None`.
     #[test]
     fn lookalike_hosts_are_none() {
-        assert_eq!(source("https://notqobuz.com/album/1"), None);
-        assert_eq!(source("https://qobuz.com.example.org/album/1"), None);
-        assert_eq!(source("https://example.org/open.qobuz.com/album/1"), None);
-        assert_eq!(source("https://mydeezer.com/track/1"), None);
-        assert_eq!(source("https://evil.page.link/abc"), None);
+        assert_eq!(source_of("https://notqobuz.com/album/1"), None);
+        assert_eq!(source_of("https://qobuz.com.example.org/album/1"), None);
+        assert_eq!(
+            source_of("https://example.org/open.qobuz.com/album/1"),
+            None
+        );
+        assert_eq!(source_of("https://mydeezer.com/track/1"), None);
+        assert_eq!(source_of("https://evil.page.link/abc"), None);
     }
 
     /// A URL without an `http` or `https` scheme, or a path, gives `None`.
     #[test]
     fn urls_without_a_scheme_or_path_are_none() {
-        assert_eq!(source("open.qobuz.com/album/1"), None);
-        assert_eq!(source("ftp://open.qobuz.com/album/1"), None);
-        assert_eq!(source("https://open.qobuz.com"), None);
-        assert_eq!(source("https://open.qobuz.com/"), None);
-        assert_eq!(source("https://deezer.page.link?x=1"), None);
-        assert_eq!(source(""), None);
-        assert_eq!(source("not a url"), None);
+        assert_eq!(source_of("open.qobuz.com/album/1"), None);
+        assert_eq!(source_of("ftp://open.qobuz.com/album/1"), None);
+        assert_eq!(source_of("https://open.qobuz.com"), None);
+        assert_eq!(source_of("https://open.qobuz.com/"), None);
+        assert_eq!(source_of("https://deezer.page.link?x=1"), None);
+        assert_eq!(source_of(""), None);
+        assert_eq!(source_of("not a url"), None);
     }
 
     // == Quality choices ======================================================

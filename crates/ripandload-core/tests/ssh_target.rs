@@ -39,7 +39,7 @@ fn server() -> Server {
         host: "localhost".into(),
         user: "ripandload".into(),
         port: 2222,
-        music_folder: "/music/ticket-07".into(),
+        music_folder: "/music/ssh-target".into(),
         ssh_key: target_dir().join("key"),
     }
 }
@@ -114,7 +114,7 @@ fn upload(staging: &Path) -> (JobRun, Vec<String>) {
 ///
 /// Panics if the folder can't be created again.
 fn fresh_music_folder() -> PathBuf {
-    let folder = target_dir().join("music/ticket-07");
+    let folder = target_dir().join("music/ssh-target");
     let _ = fs::remove_dir_all(&folder);
     fs::create_dir_all(&folder).unwrap();
     folder

@@ -1,6 +1,6 @@
 # 10 – Test fixture names
 
-Status: ready-for-agent
+Status: done
 Blocked by: 03, 09
 
 Part of `../spec.md`. First noted in tickets 07, 09 and 10 of `../../doc-comments/`. Blocked by 03 and 09 only because they edit the same files.
@@ -15,3 +15,7 @@ Part of `../spec.md`. First noted in tickets 07, 09 and 10 of `../../doc-comment
 
 - [ ] `dev/check.sh` passes.
 - [ ] The `#[ignore]`d SSH-target tests still pass against `dev/ssh-target.sh`, if it's available; otherwise say so under Comments.
+
+## Comments
+
+`dev/ssh-target.sh` never named `/music/ticket-07`; only `tests/ssh_target.rs` did. The SSH-target tests need the container, so they were renamed but not run here.

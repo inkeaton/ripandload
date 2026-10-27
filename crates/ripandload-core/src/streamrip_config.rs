@@ -427,6 +427,14 @@ mod tests {
         text.parse().unwrap()
     }
 
+    /// Returns WSL's default distro, with `rip` where Settings leave it.
+    fn wsl() -> ToolEnv {
+        ToolEnv::Wsl {
+            distro: None,
+            rip: None,
+        }
+    }
+
     /// Returns default Settings with `path` as the Staging folder.
     fn settings_with_staging(path: &str) -> Settings {
         Settings {
@@ -525,10 +533,7 @@ mod tests {
     #[test]
     fn wsl_gets_the_staging_folder_and_databases_as_mnt_paths() {
         let mut doc = doc("[downloads]\nfolder = \"old\"\n");
-        let wsl = ToolEnv::Wsl {
-            distro: None,
-            rip: None,
-        };
+        let wsl = wsl();
         apply(
             &mut doc,
             &settings_with_staging(r"C:\Users\a b\Music\ripandload"),
@@ -556,10 +561,7 @@ mod tests {
     #[test]
     fn wsl_staging_folder_off_a_drive_is_an_error() {
         let mut doc = doc("");
-        let wsl = ToolEnv::Wsl {
-            distro: None,
-            rip: None,
-        };
+        let wsl = wsl();
         let err = apply(
             &mut doc,
             &settings_with_staging(r"\\nas\music"),
