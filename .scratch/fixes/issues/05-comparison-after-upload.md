@@ -1,6 +1,6 @@
 # 05 – Comparison after an Upload
 
-Status: ready-for-agent
+Status: done
 Blocked by: 04
 
 Part of `../spec.md`. Candidate 3 of the architecture review (`../../architecture/issues/03-comparison-as-run-outcome.md`) may later move this into the run; fix the behavior now. Blocked by 04 only because both edit `app.rs`.
@@ -22,3 +22,7 @@ The same applies, more mildly, to Compare with Server: files added during the co
 - [ ] A test in `staging.rs` documents the rule at the `Comparison` level: a file in the folder but not in `contents` isn't `is_uploaded`, and `to_upload` counts it.
 - [ ] Checked by hand: add a file to the Staging folder during an Upload; the Upload tab counts it as to upload.
 - [ ] `dev/check.sh` passes.
+
+## Comments
+
+Not checked by hand: the session has no display. The snapshot is read in `upload` and `compare` after the guards and taken in `job_finished`, so any other run leaves it `None` and builds no Comparison. The rule itself is tested in `staging.rs`.

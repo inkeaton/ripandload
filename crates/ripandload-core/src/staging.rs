@@ -201,7 +201,9 @@ impl Comparison {
     /// # Arguments
     ///
     /// - `folder`: the Staging folder compared.
-    /// - `contents`: what was in `folder` at the time.
+    /// - `contents`: what was in `folder` when the run began, read before
+    ///   it started. A file added while the run went isn't in it, so it
+    ///   isn't known to be on the Server.
     /// - `to_send`: the files Compare with Server's rsync listed, relative to
     ///   `folder`; empty after an Upload that worked.
     pub fn new(folder: &Path, contents: &StagingContents, to_send: &[PathBuf]) -> Self {
@@ -556,6 +558,19 @@ mod tests {
         assert!(comparison.is_uploaded(Path::new("loose.mp3")));
         assert!(comparison.is_for(dir.path()));
         assert!(!comparison.is_for(Path::new("/elsewhere")));
+    }
+
+    /// After an Upload, a file that wasn't in `contents` is still to upload.
+    #[test]
+    fn a_file_added_during_the_run_is_not_uploaded() {
+        let dir = staging();
+        let at_start = StagingContents::read(dir.path()).unwrap();
+        let comparison = Comparison::new(dir.path(), &at_start, &[]);
+        fs::write(dir.path().join("album/03.flac"), "x").unwrap();
+        let at_end = StagingContents::read(dir.path()).unwrap();
+
+        assert!(!comparison.is_uploaded(Path::new("album/03.flac")));
+        assert_eq!(comparison.to_upload(at_end.music_files()), 1);
     }
 
     // == Clearing =============================================================

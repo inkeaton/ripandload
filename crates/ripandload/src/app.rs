@@ -16,7 +16,7 @@
 //! [`settings_tab`]. Building command lines, running tools and reading the
 //! Staging folder are `ripandload_core`'s job.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use eframe::egui;
@@ -34,6 +34,19 @@ use crate::upload_tab::{self, StagingScan, plural};
 
 /// How often the window repaints while a run is going, to show new output.
 const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Reads what's in the Staging folder for a run about to start.
+///
+/// The Comparison is built from this when the run ends, so a file that
+/// arrives meanwhile isn't counted as on the Server. A folder that can't be
+/// read doesn't stop the run; the status bar says why when it ends.
+///
+/// # Errors
+///
+/// The error chain of [`StagingContents::read`], as the status bar shows it.
+fn read_staging_at_start(folder: &Path) -> Result<StagingContents, String> {
+    return StagingContents::read(folder).map_err(|err| error_chain(&err));
+}
 
 /// The status for a run that needs a Server when no active one is set.
 const NO_SERVER: &str = "No Server configured.";
@@ -63,6 +76,10 @@ pub struct RipAndLoadApp {
     staging_scan: StagingScan,
     /// The last Compare with Server, or the last successful Upload.
     comparison: Option<Comparison>,
+    /// What was in the Staging folder when the current Upload or Compare with
+    /// Server started, or why it couldn't be read, for the Comparison to be
+    /// built from when it ends. `None` for any other run.
+    staging_at_start: Option<Result<StagingContents, String>>,
     /// What the "clear Staging folder?" dialog shows, while it's open.
     confirming_clear: Option<ClearPrompt>,
     /// The Settings as the Settings tab is editing them.
@@ -112,6 +129,7 @@ impl RipAndLoadApp {
             download: DownloadForm::default(),
             staging_scan: StagingScan::default(),
             comparison: None,
+            staging_at_start: None,
             confirming_clear: None,
             saved_settings: settings.clone(),
             settings,
@@ -196,6 +214,7 @@ impl RipAndLoadApp {
             return;
         };
         self.log.clear();
+        self.staging_at_start = Some(read_staging_at_start(&self.settings.staging_folder));
         let job = JobRun::upload(
             ToolEnv::from_settings(&self.settings),
             &self.settings.staging_folder,
@@ -236,6 +255,7 @@ impl RipAndLoadApp {
             return;
         };
         self.log.clear();
+        self.staging_at_start = Some(read_staging_at_start(&self.settings.staging_folder));
         let job = JobRun::compare(
             ToolEnv::from_settings(&self.settings),
             &self.settings.staging_folder,
@@ -308,10 +328,11 @@ impl RipAndLoadApp {
             return;
         };
         let folder = &self.settings.staging_folder;
-        if let Some(to_send) = job.to_send() {
-            match StagingContents::read(folder) {
+        let at_start = self.staging_at_start.take();
+        if let (Some(to_send), Some(at_start)) = (job.to_send(), at_start) {
+            match at_start {
                 Ok(contents) => self.comparison = Some(Comparison::new(folder, &contents, to_send)),
-                Err(err) => self.status = error_chain(&err),
+                Err(why) => self.status = why,
             }
         }
         if job.upload_succeeded() && self.settings.offer_clear_after_upload {
