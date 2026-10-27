@@ -29,7 +29,7 @@ Each of the seven deepening candidates from the architecture review of 2026-10-2
 
 ## Not yet specified
 
-- Whether, once candidates 1–3 land, `app.rs` is small enough to need no split, or whether its frame drawing (`ui()`) wants its own module.
+- Whether `app.rs` still needs a split: deferred to `issues/09-app-split.md`, blocked by fix 18; re-measure then.
 
 ## Out of scope
 
