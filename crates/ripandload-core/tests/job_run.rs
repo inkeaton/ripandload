@@ -123,7 +123,7 @@ fn cancel_stops_rip_and_skips_the_rest() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    job.cancel();
+    job.cancel(&mut log);
     run_to_end(&mut job, &mut log);
 
     assert!(has_line(&log, "Cancelled."));

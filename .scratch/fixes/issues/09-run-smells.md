@@ -1,6 +1,6 @@
 # 09 – Run smells
 
-Status: ready-for-agent
+Status: done
 Blocked by: none
 
 Part of `../spec.md`. First noted in `../../doc-comments/issues/11-jobs.md`.
@@ -16,3 +16,7 @@ Out of this ticket: the repeated ssh setup in `upload`/`compare`/`test_connectio
 
 - [ ] A test in `tests/job_run.rs` for the Cancel warning if the kill command can be made to fail from a test (e.g. a `ToolEnv` whose kill program doesn't exist); otherwise say so under Comments.
 - [ ] `dev/check.sh` passes.
+
+## Comments
+
+`JobRun::cancel` now takes the log, so the warning has somewhere to go. No test for it: the kill command exists only for `ToolEnv::Wsl`, whose `wsl.exe` start fails on Linux before a command is running, so a Cancel there never reaches the kill.

@@ -288,7 +288,7 @@ impl RipAndLoadApp {
     /// Asks the current run to cancel, if there is one.
     fn cancel_job(&mut self) {
         if let Some(job) = &mut self.job {
-            job.cancel();
+            job.cancel(&mut self.log);
         }
     }
 

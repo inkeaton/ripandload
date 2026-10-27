@@ -241,7 +241,10 @@ impl JobRun {
             match event {
                 JobEvent::Line(line) => self.on_line(line, log),
                 JobEvent::Output { stream, bytes } => {
-                    let lines = self.live.as_mut().map(|live| live.of(stream).feed(&bytes));
+                    let lines = self
+                        .live
+                        .as_mut()
+                        .map(|live| live.for_stream(stream).feed(&bytes));
                     for line in lines.into_iter().flatten() {
                         self.on_line(line, log);
                     }
@@ -266,14 +269,26 @@ impl JobRun {
     /// before it notices. Inside WSL, it also runs
     /// [`ToolEnv::cancel_command`], since killing `wsl.exe` can leave the
     /// tool running.
-    pub fn cancel(&mut self) {
+    ///
+    /// # Arguments
+    ///
+    /// - `log`: the log, which gets a `⚠` line if that command can't start,
+    ///   since the tool then keeps running in WSL. The run still counts as
+    ///   cancelled, and the line isn't a problem.
+    pub fn cancel(&mut self, log: &mut Vec<String>) {
         self.cancelled = true;
         self.queue.clear();
         if let Some((_, job)) = &self.current {
             job.cancel();
-            // Best effort: if it doesn't work, the tool keeps running in WSL.
-            if let Some(mut kill) = self.tool_env.cancel_command() {
-                let _ = kill.spawn();
+            if let Some(mut kill) = self.tool_env.cancel_command()
+                && let Err(err) = kill.spawn()
+            {
+                let message = format!(
+                    "⚠ couldn't stop the tool inside WSL, which may keep running: {}",
+                    error_chain(&err)
+                );
+                tracing::warn!("{message}");
+                log.push(message);
             }
         }
     }
@@ -607,8 +622,8 @@ struct RipOutput {
 }
 
 impl RipOutput {
-    /// Returns the output that `stream` feeds.
-    fn of(&mut self, stream: Stream) -> &mut LiveOutput {
+    /// Returns the output that `stream`'s bytes feed.
+    fn for_stream(&mut self, stream: Stream) -> &mut LiveOutput {
         match stream {
             Stream::Stdout => &mut self.stdout,
             Stream::Stderr => &mut self.stderr,
