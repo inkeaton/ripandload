@@ -1,5 +1,7 @@
 //! Checks Check tools and Downloads, started by [`start`] and run as a
-//! [`Run`].
+//! [`Run`], and the [`Outcome`] each hands over. Also checks that an Upload
+//! or Compare with Server doesn't start without a readable Staging folder;
+//! how they run is in `tests/ssh_target.rs`.
 //!
 //! `rip` is played by small `sh` scripts, through
 //! [`settings_with_script_rip`], so only on Unix. Check tools'
@@ -10,11 +12,13 @@
 #![cfg(unix)]
 #![allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use ripandload_core::run::Run;
-use ripandload_core::settings::Settings;
+use ripandload_core::error::{CantStart, StagingError};
+use ripandload_core::run::{Outcome, Run};
+use ripandload_core::settings::{Server, Settings};
 use ripandload_core::start::{Request, start};
 
 mod common;
@@ -80,6 +84,20 @@ fn check_tools_confirms_the_expected_streamrip_version() {
         ["$ rip --version", "rip, version 2.2.0", "✓ streamrip 2.2.0"]
     );
     assert!(has_line(&log, "$ rsync --version"));
+}
+
+/// Check tools hands over `Nothing`, and only once.
+#[test]
+fn check_tools_hands_over_nothing_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_with_script_rip(dir.path(), "echo 'rip, version 2.2.0'");
+    let mut log = Vec::new();
+    let mut run = started(&settings, Request::CheckTools, dir.path(), &mut log);
+    assert!(run.take_outcome().is_none(), "the Run is still going");
+    run_to_end(&mut run, &mut log);
+
+    assert!(matches!(run.take_outcome(), Some(Outcome::Nothing)));
+    assert!(run.take_outcome().is_none(), "handed over twice");
 }
 
 /// Another streamrip version is a problem, with a warning in the log.
@@ -169,6 +187,7 @@ fn first_download_creates_the_streamrip_config_and_runs_rip() {
         ]
     );
     assert_eq!(run.status(), "Download finished");
+    assert!(matches!(run.take_outcome(), Some(Outcome::Downloaded)));
 }
 
 /// A Download with the Streamrip config already there logs no line about
@@ -213,4 +232,45 @@ fn failed_download_reports_the_exit_code() {
         "{log:#?}"
     );
     assert_eq!(run.status(), "Download: 1 problem, see the log");
+    // rip may have downloaded some of it before failing.
+    assert!(matches!(run.take_outcome(), Some(Outcome::Downloaded)));
+}
+
+// == Upload and Compare with Server ===========================================
+
+/// A Staging folder that can't be read stops Compare with Server before
+/// anything runs, since there'd be nothing to compare with.
+#[test]
+fn compare_with_an_unreadable_staging_folder_cant_start() {
+    let dir = tempfile::tempdir().unwrap();
+    // A file stands in for the folder, so listing it fails even as root.
+    let staging = dir.path().join("not a folder");
+    fs::write(&staging, "").unwrap();
+    let settings = Settings {
+        staging_folder: staging,
+        servers: vec![Server {
+            host: "music.example".into(),
+            music_folder: "/srv/music".into(),
+            ..Server::default()
+        }],
+        ..Settings::default()
+    };
+    let mut log = Vec::new();
+
+    let result = start(
+        &settings,
+        Request::Compare,
+        &places_in(dir.path()),
+        &mut log,
+    );
+
+    assert!(
+        matches!(result, Err(CantStart::Staging(StagingError::Read { .. }))),
+        "{log:#?}"
+    );
+    assert_eq!(log.len(), 1, "{log:#?}");
+    assert!(
+        log[0].starts_with("✗ couldn't look through the Staging folder: couldn't read "),
+        "{log:#?}"
+    );
 }

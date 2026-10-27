@@ -20,8 +20,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use ripandload_core::run::Run;
+use ripandload_core::run::{Outcome, Run};
 use ripandload_core::settings::{Server, Settings};
+use ripandload_core::staging::Comparison;
 use ripandload_core::start::{Places, Request, start};
 
 // == Fixtures =================================================================
@@ -70,6 +71,20 @@ fn settings(server: Server, staging: &Path) -> Settings {
 ///
 /// Panics if the Run can't start, or takes longer than [`TIMEOUT`].
 fn started(settings: &Settings, request: Request) -> (Run, Vec<String>) {
+    let (run, log) = just_started(settings, request);
+    run_to_end(run, log)
+}
+
+/// Starts `request` with `settings`, without waiting for it.
+///
+/// # Returns
+///
+/// The Run, just started, and the lines it logged so far.
+///
+/// # Panics
+///
+/// Panics if the Run can't start.
+fn just_started(settings: &Settings, request: Request) -> (Run, Vec<String>) {
     let places = Places {
         streamrip_config: None,
         personal: None,
@@ -77,7 +92,7 @@ fn started(settings: &Settings, request: Request) -> (Run, Vec<String>) {
     let mut log = Vec::new();
     let run = start(settings, request, &places, &mut log)
         .unwrap_or_else(|cant| panic!("the Run didn't start: {cant}"));
-    run_to_end(run, log)
+    (run, log)
 }
 
 /// Polls `run` the way the GUI does, until it's finished.
@@ -133,6 +148,30 @@ fn test_connection(server: &Server) -> (Run, Vec<String>) {
 /// Panics if the run can't start, or takes longer than [`TIMEOUT`].
 fn upload(staging: &Path) -> (Run, Vec<String>) {
     started(&settings(server(), staging), Request::Upload)
+}
+
+/// Returns the Comparison a finished Upload hands over.
+///
+/// # Panics
+///
+/// Panics if `run` hands over anything but `Uploaded`.
+fn uploaded(run: &mut Run) -> Comparison {
+    match run.take_outcome() {
+        Some(Outcome::Uploaded(comparison)) => comparison,
+        outcome => panic!("expected Uploaded, got {outcome:?}"),
+    }
+}
+
+/// Returns the Comparison a finished Compare with Server hands over.
+///
+/// # Panics
+///
+/// Panics if `run` hands over anything but `Compared`.
+fn compared(run: &mut Run) -> Comparison {
+    match run.take_outcome() {
+        Some(Outcome::Compared(comparison)) => comparison,
+        outcome => panic!("expected Compared, got {outcome:?}"),
+    }
 }
 
 /// Empties the tests' music folder on the Server.
@@ -239,11 +278,12 @@ fn upload_copies_staging_once_and_never_deletes() {
     )
     .unwrap();
 
-    let (run, log) = upload(staging.path());
+    let (mut run, log) = upload(staging.path());
     assert!(run.succeeded(), "{log:#?}");
     assert_eq!(run.status(), "Upload finished");
-    assert!(run.upload_succeeded());
-    assert_eq!(run.to_send(), Some(&[][..]), "everything went");
+    let song = Path::new("Artist - Album (2024)/01. Song.flac");
+    let comparison = uploaded(&mut run);
+    assert_eq!(comparison.to_upload([song]), 0, "everything went");
     assert!(
         log.iter()
             .any(|line| line == "Artist - Album (2024)/01. Song.flac"),
@@ -279,22 +319,39 @@ fn compare_lists_only_what_the_server_lacks_and_sends_nothing() {
 
     write("Björk - Debut (1993)/Disc 1/01. Human Behaviour.flac");
     write("Björk - Debut (1993)/cover.jpg");
-    let (run, log) = started(&settings(server(), staging.path()), Request::Compare);
+    let (mut run, log) = started(&settings(server(), staging.path()), Request::Compare);
 
     assert!(run.succeeded(), "{log:#?}");
     assert_eq!(run.status(), "Compare with Server finished");
-    assert_eq!(
-        run.to_send().unwrap(),
-        // rsync lists a folder's files before its subfolders.
-        [
-            PathBuf::from("Björk - Debut (1993)/cover.jpg"),
-            PathBuf::from("Björk - Debut (1993)/Disc 1/01. Human Behaviour.flac"),
-        ]
-    );
+    let old = Path::new("Old - Album (2020)/01. Song.flac");
+    let new = Path::new("Björk - Debut (1993)/Disc 1/01. Human Behaviour.flac");
+    let comparison = compared(&mut run);
+    assert!(comparison.is_uploaded(old));
+    assert!(!comparison.is_uploaded(new));
+    assert_eq!(comparison.to_upload([old, new]), 1);
     assert!(!music.join("Björk - Debut (1993)").exists());
 }
 
-/// A failed Upload leaves no Comparison, since it learned nothing.
+/// A file that arrives in the Staging folder while an Upload goes isn't
+/// counted as on the Server, even if rsync sent it.
+#[test]
+#[ignore = "needs dev/ssh-target.sh"]
+fn a_file_arriving_during_an_upload_isnt_counted_as_uploaded() {
+    fresh_music_folder();
+    let staging = tempfile::tempdir().unwrap();
+    fs::write(staging.path().join("01. Before.flac"), "x").unwrap();
+
+    let (run, log) = just_started(&settings(server(), staging.path()), Request::Upload);
+    fs::write(staging.path().join("02. During.flac"), "x").unwrap();
+    let (mut run, log) = run_to_end(run, log);
+
+    assert!(run.succeeded(), "{log:#?}");
+    let comparison = uploaded(&mut run);
+    assert!(comparison.is_uploaded(Path::new("01. Before.flac")));
+    assert!(!comparison.is_uploaded(Path::new("02. During.flac")));
+}
+
+/// A failed Upload hands over `Nothing`, since it learned nothing.
 #[test]
 #[ignore = "needs dev/ssh-target.sh"]
 fn a_failed_upload_says_nothing_about_the_server() {
@@ -303,8 +360,8 @@ fn a_failed_upload_says_nothing_about_the_server() {
     let mut server = server();
     server.port = 2223;
 
-    let (run, log) = started(&settings(server, staging.path()), Request::Upload);
+    let (mut run, log) = started(&settings(server, staging.path()), Request::Upload);
 
     assert!(!run.succeeded(), "{log:#?}");
-    assert_eq!(run.to_send(), None);
+    assert!(matches!(run.take_outcome(), Some(Outcome::Nothing)));
 }

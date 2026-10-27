@@ -8,6 +8,8 @@
 //!
 //! A Download also gets the Streamrip config ready here: rendered from the
 //! Settings, seeded on the first Download, and its path converted for `rip`.
+//! An Upload or Compare with Server reads what's in the Staging folder, for
+//! the Comparison the Run builds when it ends.
 //!
 //! This module builds no command lines of its own (they come from
 //! [`command`]) and runs nothing past `Run::new`. It shows nothing either:
@@ -17,8 +19,9 @@ use std::path::{Path, PathBuf};
 
 use crate::command::{self, CommandSpec};
 use crate::error::{CantStart, error_chain};
-use crate::run::{Kind, Run};
+use crate::run::{Kind, Run, StagingAtStart};
 use crate::settings::{Server, Settings};
+use crate::staging::StagingContents;
 use crate::streamrip_config::{self, Seeded};
 use crate::tool_env::ToolEnv;
 
@@ -78,8 +81,9 @@ impl Places {
 /// Streamrip config from `settings`, which on the very first Download
 /// without a personal streamrip config runs `rip` to create a default, and
 /// logs where a new Streamrip config came from. Upload, Compare with Server
-/// and Test connection need the active Server set up, as [`server`] checks.
-/// The Settings aren't validated otherwise.
+/// and Test connection need the active Server set up, as [`server`] checks;
+/// an Upload or Compare with Server reads the Staging folder last, so just
+/// before its first process. The Settings aren't validated otherwise.
 ///
 /// # Arguments
 ///
@@ -104,6 +108,8 @@ impl Places {
 ///   rendered.
 /// - [`CantStart::Tool`] if a path the tools need, the Streamrip config,
 ///   the Staging folder or the SSH key, can't be converted for them.
+/// - [`CantStart::Staging`] if the Staging folder can't be read for an
+///   Upload or Compare with Server.
 pub fn start(
     settings: &Settings,
     request: Request,
@@ -167,8 +173,12 @@ fn start_in(
     log: &mut Vec<String>,
 ) -> Result<Run, CantStart> {
     log.clear();
-    match commands(&tool_env, settings, request, places, log) {
-        Ok((kind, specs)) => return Ok(Run::new(kind, tool_env, specs, log)),
+    let ready = commands(&tool_env, settings, request, places, log).and_then(|(kind, specs)| {
+        let at_start = staging_at_start(kind, settings)?;
+        return Ok((kind, specs, at_start));
+    });
+    match ready {
+        Ok((kind, specs, at_start)) => return Ok(Run::new(kind, tool_env, specs, at_start, log)),
         Err(cant) => {
             let message = format!("✗ {}", error_chain(&cant));
             tracing::warn!("{message}");
@@ -242,6 +252,26 @@ fn commands(
         }
     };
     return Ok(commands);
+}
+
+/// Reads what's in the Staging folder, if a Run of `kind` ends with a
+/// Comparison.
+///
+/// # Returns
+///
+/// For an Upload or Compare with Server, the Staging folder `settings` name
+/// and what's in it now; `None` for any other Run.
+///
+/// # Errors
+///
+/// [`CantStart::Staging`] if the Staging folder can't be read.
+fn staging_at_start(kind: Kind, settings: &Settings) -> Result<Option<StagingAtStart>, CantStart> {
+    if !kind.ends_with_comparison() {
+        return Ok(None);
+    }
+    let folder = settings.staging_folder.clone();
+    let contents = StagingContents::read(&folder).map_err(CantStart::Staging)?;
+    return Ok(Some(StagingAtStart { folder, contents }));
 }
 
 /// Renders the Streamrip config for a Download.

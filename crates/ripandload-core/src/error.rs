@@ -262,6 +262,15 @@ pub enum CantStart {
         #[from]
         ToolError,
     ),
+
+    /// The Staging folder couldn't be read before an Upload or Compare with
+    /// Server, so there'd be nothing to build the Comparison from.
+    #[error("couldn't look through the Staging folder")]
+    Staging(
+        /// Why it couldn't be read.
+        #[source]
+        StagingError,
+    ),
 }
 
 /// Returns what [`CantStart::ServerIncomplete`] asks the user to set: the

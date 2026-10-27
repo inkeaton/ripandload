@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use ripandload_core::error::ProcessError;
-use ripandload_core::process::{Outcome, Process, ProcessEvent, Stream};
+use ripandload_core::process::{Exit, Process, ProcessEvent, Stream};
 
 // == Fixtures =================================================================
 
@@ -48,7 +48,7 @@ fn fake_rip(lines: u32, delay: f32, exit_code: i32) -> Command {
 ///
 /// Panics if no event arrives within [`TIMEOUT`], or if `process` sends raw
 /// `Output`, which only [`Process::spawn_raw`] does.
-fn run_to_end(process: &Process) -> (Vec<String>, Outcome) {
+fn run_to_end(process: &Process) -> (Vec<String>, Exit) {
     let mut lines = Vec::new();
     loop {
         match process
@@ -58,7 +58,7 @@ fn run_to_end(process: &Process) -> (Vec<String>, Outcome) {
         {
             ProcessEvent::Line(line) => lines.push(line),
             ProcessEvent::Output { .. } => panic!("Process::spawn sends lines"),
-            ProcessEvent::Finished(outcome) => return (lines, outcome),
+            ProcessEvent::Finished(exit) => return (lines, exit),
         }
     }
 }
@@ -79,7 +79,7 @@ fn missing_program_is_a_spawn_error() {
 #[test]
 fn lines_arrive_in_order_then_success() {
     let process = Process::spawn(fake_rip(5, 0.01, 0)).unwrap();
-    let (lines, outcome) = run_to_end(&process);
+    let (lines, exit) = run_to_end(&process);
 
     let stdout: Vec<&str> = lines
         .iter()
@@ -91,15 +91,15 @@ fn lines_arrive_in_order_then_success() {
         lines.contains(&"fake-rip: done".to_owned()),
         "stderr is streamed too"
     );
-    assert_eq!(outcome, Outcome::Succeeded);
+    assert_eq!(exit, Exit::Succeeded);
 }
 
 /// A failing process reports its exit code.
 #[test]
 fn exit_code_is_reported() {
     let process = Process::spawn(fake_rip(1, 0.0, 3)).unwrap();
-    let (_, outcome) = run_to_end(&process);
-    assert_eq!(outcome, Outcome::Failed { code: Some(3) });
+    let (_, exit) = run_to_end(&process);
+    assert_eq!(exit, Exit::Failed { code: Some(3) });
 }
 
 // == Raw output ===============================================================
@@ -151,8 +151,8 @@ fn cancel_stops_the_process() {
     }
 
     process.cancel();
-    let (lines, outcome) = run_to_end(&process);
-    assert_eq!(outcome, Outcome::Cancelled);
+    let (lines, exit) = run_to_end(&process);
+    assert_eq!(exit, Exit::Cancelled);
     assert!(
         lines.len() < 99,
         "process kept running: {} more lines",
@@ -177,6 +177,6 @@ fn cancel_works_while_a_grandchild_holds_the_output_open() {
     );
 
     process.cancel();
-    let (_, outcome) = run_to_end(&process);
-    assert_eq!(outcome, Outcome::Cancelled);
+    let (_, exit) = run_to_end(&process);
+    assert_eq!(exit, Exit::Cancelled);
 }

@@ -10,10 +10,17 @@
 //! Check tools carries on after a problem, so one missing tool doesn't hide
 //! the others. Every other run stops at its first problem.
 //!
+//! When its last command ends, a run works out its [`Outcome`]: what the app
+//! has to catch up with, such as the Comparison an Upload or Compare with
+//! Server leaves. For those two, it builds the Comparison from what was in
+//! the Staging folder when it started, so a file that arrives meanwhile
+//! isn't counted as on the Server.
+//!
 //! This module builds no command lines: they come from [`command`], and
-//! [`ToolEnv`] turns them into processes. The log here is the one the app
-//! shows; what reaches the log file goes through `tracing`, which the GUI
-//! sets up.
+//! [`ToolEnv`] turns them into processes. It doesn't read the Staging folder
+//! either: [`start::start`] reads it and hands it over. The log here is the
+//! one the app shows; what reaches the log file goes through `tracing`,
+//! which the GUI sets up.
 //!
 //! # Log lines
 //!
@@ -25,6 +32,8 @@
 //! - `✗ ...`: a command that couldn't start or failed, counted as a problem.
 //! - `→ ...`: a hint, such as where Check tools found streamrip.
 //! - `Cancelled.`: the current command was cancelled.
+//!
+//! [`start::start`]: crate::start::start
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -33,7 +42,8 @@ use std::sync::mpsc::TryRecvError;
 use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
 use crate::error::error_chain;
 use crate::live_output::LiveOutput;
-use crate::process::{Outcome, Process, ProcessEvent, Stream};
+use crate::process::{Exit, Process, ProcessEvent, Stream};
+use crate::staging::{Comparison, StagingContents};
 use crate::tool_env::ToolEnv;
 
 /// ssh's exit code when it couldn't connect or log in.
@@ -79,10 +89,37 @@ impl Kind {
         self != Kind::CheckTools
     }
 
+    /// Returns whether the run ends with a Comparison when it succeeds, so
+    /// it needs what was in the Staging folder when it started.
+    pub(crate) fn ends_with_comparison(self) -> bool {
+        return matches!(self, Kind::Upload | Kind::Compare);
+    }
+
     /// Returns whether success reads "finished" rather than "all good".
     fn says_finished(self) -> bool {
         matches!(self, Kind::Download | Kind::Upload | Kind::Compare)
     }
+}
+
+// == Outcomes =================================================================
+
+/// What a finished [`Run`] leaves for the app to catch up with.
+///
+/// The Staging folder may have changed after any run, so the app rereads it
+/// whatever the Outcome.
+#[derive(Debug, Clone)]
+pub enum Outcome {
+    /// A Download ended, however it went: `rip` may have written files to
+    /// the Staging folder, or the Qobuz `app_id` to the Streamrip config,
+    /// before it failed or was cancelled.
+    Downloaded,
+    /// A Compare with Server succeeded, finding this.
+    Compared(Comparison),
+    /// An Upload succeeded, leaving this Comparison, with nothing to send.
+    Uploaded(Comparison),
+    /// Nothing to catch up with: Check tools, Test connection, or an Upload
+    /// or Compare with Server that failed or was cancelled.
+    Nothing,
 }
 
 // == Runs =====================================================================
@@ -91,8 +128,9 @@ impl Kind {
 /// Test connection.
 ///
 /// It's started by [`start::start`], then driven by [`Run::poll`] until
-/// [`Run::is_finished`]. A run whose first command can't spawn is already
-/// finished when it's returned, with the problem in the log.
+/// [`Run::is_finished`], when [`Run::take_outcome`] hands over its
+/// [`Outcome`]. A run whose first command can't spawn is already finished
+/// when it's returned, with the problem in the log.
 ///
 /// [`start::start`]: crate::start::start
 pub struct Run {
@@ -109,6 +147,11 @@ pub struct Run {
     /// For Compare with Server: the files an Upload would send, relative to
     /// the Staging folder.
     to_send: Vec<PathBuf>,
+    /// For an Upload or Compare with Server: what was in the Staging folder
+    /// when it started.
+    staging_at_start: Option<StagingAtStart>,
+    /// How the run ended, from when it ends until [`Run::take_outcome`].
+    outcome: Option<Outcome>,
     /// While `rip` downloads: its output, progress bars and all.
     live: Option<RipOutput>,
     /// How many problems were logged so far.
@@ -132,6 +175,8 @@ impl Run {
     /// - `tool_env`: where the tools run.
     /// - `specs`: the commands to run, in order. Empty starts nothing, and
     ///   the run is over at once.
+    /// - `staging_at_start`: for an Upload or Compare with Server, what is in
+    ///   the Staging folder now. Without it, neither ends with a Comparison.
     /// - `log`: the log, which gets the first command line, or why the
     ///   commands couldn't start.
     ///
@@ -140,6 +185,7 @@ impl Run {
         kind: Kind,
         tool_env: ToolEnv,
         specs: Vec<CommandSpec>,
+        staging_at_start: Option<StagingAtStart>,
         log: &mut Vec<String>,
     ) -> Self {
         let mut run = Self {
@@ -149,6 +195,8 @@ impl Run {
             current: None,
             rip_version: None,
             to_send: Vec::new(),
+            staging_at_start,
+            outcome: None,
             live: None,
             problems: 0,
             cancelled: false,
@@ -170,7 +218,7 @@ impl Run {
                 Err(TryRecvError::Empty) => break,
                 // The exit thread died without saying how it ended.
                 Err(TryRecvError::Disconnected) => {
-                    ProcessEvent::Finished(Outcome::Failed { code: None })
+                    ProcessEvent::Finished(Exit::Failed { code: None })
                 }
             };
             match event {
@@ -184,7 +232,7 @@ impl Run {
                         self.on_line(line, log);
                     }
                 }
-                ProcessEvent::Finished(outcome) => {
+                ProcessEvent::Finished(exit) => {
                     if let Some(live) = self.live.take() {
                         for mut output in [live.stdout, live.stderr] {
                             for line in output.finish() {
@@ -192,7 +240,7 @@ impl Run {
                             }
                         }
                     }
-                    self.on_finished(outcome, log);
+                    self.on_finished(exit, log);
                 }
             }
         }
@@ -240,29 +288,14 @@ impl Run {
         self.is_finished() && !self.cancelled && self.problems == 0
     }
 
-    /// Returns whether this is a Download, the one run that can write the
-    /// Qobuz `app_id` into the Streamrip config.
-    pub fn is_download(&self) -> bool {
-        self.kind == Kind::Download
-    }
-
-    /// Returns whether this is an Upload that succeeded, so the Server has
-    /// everything.
-    pub fn upload_succeeded(&self) -> bool {
-        self.kind == Kind::Upload && self.succeeded()
-    }
-
-    /// Returns what the run found out about the Comparison.
+    /// Hands over how the run ended, once.
     ///
     /// # Returns
     ///
-    /// - After a Compare with Server that succeeded: the files an Upload
-    ///   would send, relative to the Staging folder.
-    /// - After an Upload that succeeded: empty, since it sent them all.
-    /// - `None` for any other run, or one that hasn't succeeded.
-    pub fn to_send(&self) -> Option<&[PathBuf]> {
-        let knows = matches!(self.kind, Kind::Compare | Kind::Upload) && self.succeeded();
-        knows.then_some(&self.to_send)
+    /// The run's [`Outcome`] the first time it's called after the run
+    /// ended; `None` while the run goes, and every time after the first.
+    pub fn take_outcome(&mut self) -> Option<Outcome> {
+        return self.outcome.take();
     }
 
     /// Returns rip's progress bars while a Download runs, one per row.
@@ -308,7 +341,7 @@ impl Run {
     /// Each command line is written to `log` before it starts. A command that
     /// can't start is logged as a problem, and the next one is tried unless
     /// the run stops at its first problem. When none is left, the run is
-    /// over.
+    /// over, and its [`Outcome`] is worked out.
     fn start_next(&mut self, log: &mut Vec<String>) {
         while let Some(spec) = self.queue.pop_front() {
             tracing::info!("$ {spec}");
@@ -338,6 +371,26 @@ impl Run {
                 ),
                 Err(message) => self.problem(log, format!("✗ {message}")),
             }
+        }
+        self.outcome = Some(self.outcome_at_end());
+    }
+
+    /// Returns the [`Outcome`] of the run, which has just ended.
+    ///
+    /// It uses up what was in the Staging folder at the start. A Comparison
+    /// holds the files that were there then, but is dated now, when the run
+    /// ended.
+    fn outcome_at_end(&mut self) -> Outcome {
+        let succeeded = self.succeeded();
+        match (self.kind, self.staging_at_start.take()) {
+            (Kind::Download, _) => return Outcome::Downloaded,
+            (Kind::Compare, Some(at_start)) if succeeded => {
+                return Outcome::Compared(at_start.comparison(&self.to_send));
+            }
+            (Kind::Upload, Some(at_start)) if succeeded => {
+                return Outcome::Uploaded(at_start.comparison(&[]));
+            }
+            _ => return Outcome::Nothing,
         }
     }
 
@@ -391,7 +444,7 @@ impl Run {
 
     // == Finished commands ====================================================
 
-    /// Writes to `log` how the current command ended, given its `outcome`,
+    /// Writes to `log` how the current command ended, given its `exit`,
     /// then starts the next command.
     ///
     /// - Success logs nothing, except after Check tools' `rip --version`,
@@ -404,19 +457,19 @@ impl Run {
     /// - Cancel logs `Cancelled.`.
     ///
     /// The pyenv probe never counts as a problem, however it ends.
-    fn on_finished(&mut self, outcome: Outcome, log: &mut Vec<String>) {
+    fn on_finished(&mut self, exit: Exit, log: &mut Vec<String>) {
         let Some((spec, _)) = self.current.take() else {
             return;
         };
-        tracing::info!(?outcome, "{spec} ended");
-        match outcome {
+        tracing::info!(?exit, "{spec} ended");
+        match exit {
             // Finding nothing isn't a problem of its own.
             _ if spec == command::pyenv_probe_spec() => {}
-            Outcome::Succeeded if self.kind == Kind::CheckTools && spec.program == Tool::Rip => {
+            Exit::Succeeded if self.kind == Kind::CheckTools && spec.program == Tool::Rip => {
                 self.check_rip_version(log)
             }
-            Outcome::Succeeded => {}
-            Outcome::Failed { code: Some(code) } => {
+            Exit::Succeeded => {}
+            Exit::Failed { code: Some(code) } => {
                 let message = self.failure_message(&spec, code);
                 self.problem(log, message);
                 if spec == command::wsl_check_spec() {
@@ -426,10 +479,10 @@ impl Run {
                     self.queue.push_front(command::pyenv_probe_spec());
                 }
             }
-            Outcome::Failed { code: None } => {
+            Exit::Failed { code: None } => {
                 self.problem(log, format!("✗ {spec} ended without an exit code"));
             }
-            Outcome::Cancelled => {
+            Exit::Cancelled => {
                 log.push("Cancelled.".to_owned());
             }
         }
@@ -502,6 +555,30 @@ impl Run {
     /// because no `rip` was there.
     fn rip_missing_in_wsl(&self, spec: &CommandSpec, code: i32) -> bool {
         self.tool_env.is_wsl() && spec.program == Tool::Rip && code == SHELL_NOT_FOUND
+    }
+}
+
+// == What a Run starts with ===================================================
+
+/// What was in the Staging folder when an Upload or Compare with Server
+/// started, for the Comparison it ends with.
+#[derive(Debug, Clone)]
+pub(crate) struct StagingAtStart {
+    /// The Staging folder, as the app reads it, not as the tools see it.
+    pub(crate) folder: PathBuf,
+    /// What was in it.
+    pub(crate) contents: StagingContents,
+}
+
+impl StagingAtStart {
+    /// Returns the Comparison of this Staging folder, made now.
+    ///
+    /// # Arguments
+    ///
+    /// - `to_send`: the files an Upload would still send, relative to the
+    ///   Staging folder; empty after an Upload that succeeded.
+    fn comparison(self, to_send: &[PathBuf]) -> Comparison {
+        return Comparison::new(&self.folder, &self.contents, to_send);
     }
 }
 

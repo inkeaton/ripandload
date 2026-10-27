@@ -17,12 +17,12 @@
 //! [`settings_tab`]. `ripandload_core` builds the command lines, runs the
 //! tools and reads the Staging folder.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use eframe::egui;
 use ripandload_core::error::error_chain;
-use ripandload_core::run::Run;
+use ripandload_core::run::{Outcome, Run};
 use ripandload_core::settings::Settings;
 use ripandload_core::staging::{self, Comparison, StagingContents};
 use ripandload_core::start::{self, Places, Request};
@@ -56,10 +56,6 @@ pub struct RipAndLoadApp {
     staging_scan: StagingScan,
     /// The last Compare with Server, or the last successful Upload.
     comparison: Option<Comparison>,
-    /// What was in the Staging folder when the current Upload or Compare with
-    /// Server started, or why it couldn't be read, for the Comparison to be
-    /// built from when it ends. `None` for any other run.
-    staging_at_start: Option<Result<StagingContents, String>>,
     /// What the "clear Staging folder?" dialog shows, while it's open.
     confirming_clear: Option<ClearPrompt>,
     /// The Settings as the Settings tab is editing them.
@@ -111,7 +107,6 @@ impl RipAndLoadApp {
             download: DownloadForm::default(),
             staging_scan: StagingScan::default(),
             comparison: None,
-            staging_at_start: None,
             confirming_clear: None,
             saved_settings: settings.clone(),
             settings,
@@ -129,12 +124,9 @@ impl RipAndLoadApp {
     /// [`start::start`] clears the log first. For a Download it also writes
     /// the Streamrip config, on the UI thread: quick, except the very first
     /// time without a personal streamrip config, when `rip` has to create a
-    /// default config to start from. An Upload or Compare with Server also
-    /// reads what's in the Staging folder now, for the Comparison. If the
-    /// run can't start, the log and the status bar say why.
+    /// default config to start from. If the run can't start, the log and
+    /// the status bar say why.
     fn start_run(&mut self, request: Request) {
-        let reads_staging = matches!(request, Request::Upload | Request::Compare);
-        let at_start = reads_staging.then(|| read_staging_at_start(&self.settings.staging_folder));
         let run = match start::start(&self.settings, request, &self.places, &mut self.log) {
             Ok(run) => run,
             Err(cant) => {
@@ -142,7 +134,6 @@ impl RipAndLoadApp {
                 return;
             }
         };
-        self.staging_at_start = at_start;
         self.status = run.status();
         let finished = run.is_finished();
         self.run = Some(run);
@@ -191,30 +182,29 @@ impl RipAndLoadApp {
 
     /// Catches the app up with a run that has just ended.
     ///
-    /// Called once per run. It marks the Staging folder for a rescan,
-    /// retries the Previews that failed after a Download, builds a Comparison
-    /// from what the run found out, if anything, and after a successful Upload
-    /// offers to clear the Staging folder, if Settings say to. If the Staging
-    /// folder can't be read for the Comparison, the status bar says why.
+    /// Called once per run. It marks the Staging folder for a rescan, then
+    /// acts on the run's Outcome: after a Download it retries the Previews
+    /// that failed, after Compare with Server it keeps the Comparison, and
+    /// after a successful Upload it keeps the Comparison too and offers to
+    /// clear the Staging folder, if Settings say to.
     fn run_finished(&mut self) {
         // Downloads and Uploads change what's in the Staging folder.
         self.staging_scan.invalidate();
-        let Some(run) = &self.run else {
+        let Some(outcome) = self.run.as_mut().and_then(Run::take_outcome) else {
             return;
         };
-        if run.is_download() {
-            self.download.retry_previews();
-        }
-        let folder = &self.settings.staging_folder;
-        let at_start = self.staging_at_start.take();
-        if let (Some(to_send), Some(at_start)) = (run.to_send(), at_start) {
-            match at_start {
-                Ok(contents) => self.comparison = Some(Comparison::new(folder, &contents, to_send)),
-                Err(why) => self.status = why,
+        match outcome {
+            // A Download may have written the Qobuz `app_id` that the
+            // Previews need.
+            Outcome::Downloaded => self.download.retry_previews(),
+            Outcome::Compared(comparison) => self.comparison = Some(comparison),
+            Outcome::Uploaded(comparison) => {
+                self.comparison = Some(comparison);
+                if self.settings.offer_clear_after_upload {
+                    self.ask_to_clear(true);
+                }
             }
-        }
-        if run.upload_succeeded() && self.settings.offer_clear_after_upload {
-            self.ask_to_clear(true);
+            Outcome::Nothing => {}
         }
     }
 
@@ -546,21 +536,6 @@ impl eframe::App for RipAndLoadApp {
         self.confirm_clear(&ctx);
         self.guard_close(&ctx);
     }
-}
-
-// == Helpers ==================================================================
-
-/// Reads what's in the Staging folder for a run about to start.
-///
-/// The Comparison is built from this when the run ends, so a file that
-/// arrives meanwhile isn't counted as on the Server. A folder that can't be
-/// read doesn't stop the run; the status bar says why when it ends.
-///
-/// # Errors
-///
-/// The error chain of [`StagingContents::read`], as the status bar shows it.
-fn read_staging_at_start(folder: &Path) -> Result<StagingContents, String> {
-    return StagingContents::read(folder).map_err(|err| error_chain(&err));
 }
 
 // == Internal types ===========================================================

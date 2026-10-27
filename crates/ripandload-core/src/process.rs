@@ -47,7 +47,7 @@ pub enum ProcessEvent {
         bytes: Vec<u8>,
     },
     /// How the process ended. No events follow.
-    Finished(Outcome),
+    Finished(Exit),
 }
 
 /// Which output stream of the process a [`ProcessEvent::Output`] came from.
@@ -64,7 +64,7 @@ pub enum Stream {
 
 /// How a [`Process`] ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome {
+pub enum Exit {
     /// It exited with a success status.
     Succeeded,
     /// It exited with a failure status, or couldn't be waited for.
@@ -78,12 +78,12 @@ pub enum Outcome {
 }
 
 /// Reads `Succeeded` from a success status, `Failed` from any other.
-impl From<ExitStatus> for Outcome {
+impl From<ExitStatus> for Exit {
     fn from(status: ExitStatus) -> Self {
         if status.success() {
-            Outcome::Succeeded
+            Exit::Succeeded
         } else {
-            Outcome::Failed {
+            Exit::Failed {
                 code: status.code(),
             }
         }
@@ -176,18 +176,18 @@ impl Process {
         let flag = Arc::clone(&cancelled);
         // `move` hands the child, the readers and the sender to the new thread.
         thread::spawn(move || {
-            let mut outcome = wait(&mut child, &flag);
+            let mut exit = wait(&mut child, &flag);
             // Let the readers finish, so every line arrives before `Finished`.
             // A grandchild may still hold the pipes open, so Cancel keeps
             // working.
-            while outcome != Outcome::Cancelled && !readers.iter().all(JoinHandle::is_finished) {
+            while exit != Exit::Cancelled && !readers.iter().all(JoinHandle::is_finished) {
                 if flag.load(Ordering::Relaxed) {
-                    outcome = Outcome::Cancelled;
+                    exit = Exit::Cancelled;
                 } else {
                     thread::sleep(POLL_INTERVAL);
                 }
             }
-            let _ = sender.send(ProcessEvent::Finished(outcome));
+            let _ = sender.send(ProcessEvent::Finished(exit));
         });
 
         Ok(Process { events, cancelled })
@@ -298,17 +298,17 @@ fn forward_chunks(
 ///
 /// How `child` exited; `Cancelled` if it was killed; `Failed` with no code
 /// if its status couldn't be read.
-fn wait(child: &mut Child, cancelled: &AtomicBool) -> Outcome {
+fn wait(child: &mut Child, cancelled: &AtomicBool) -> Exit {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return status.into(),
             Ok(None) => {}
-            Err(_) => return Outcome::Failed { code: None },
+            Err(_) => return Exit::Failed { code: None },
         }
         if cancelled.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
-            return Outcome::Cancelled;
+            return Exit::Cancelled;
         }
         thread::sleep(POLL_INTERVAL);
     }
