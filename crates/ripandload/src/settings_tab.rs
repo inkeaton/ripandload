@@ -1,31 +1,98 @@
-//! The Settings tab's form.
+//! The Settings tab: its buttons, the Settings' problems, and the form.
 //!
-//! [`show`] draws one headed grid per group of Settings: Credentials,
-//! Quality, Naming templates, Folders and tools, and the active Server.
-//! Every field edits a [`Settings`] value in place, as the user types.
+//! [`show`] draws Save, Check tools and Test connection, then a warning
+//! line per problem the Settings have, then one headed grid per group of
+//! Settings: Credentials, Quality, Naming templates, Folders and tools, and
+//! the active Server. Every field edits a [`Settings`] value in place, as
+//! the user types; path fields are [`PathPicker`]s.
 //!
 //! On Windows the form also edits the WSL distro and where `rip` is inside
-//! it. Picking a file or folder inside a distro with Browse… sets the WSL
-//! distro, if it's still unset, so the tools run where the file is.
+//! it.
 //!
-//! The form doesn't save or check what it edits. The Save, Check tools and
-//! Test connection buttons above it, and the Settings' problems, are drawn
-//! by [`RipAndLoadApp`], which also saves.
+//! The tab doesn't save the Settings or start Runs: it returns what the
+//! user clicked as an [`Action`], and [`RipAndLoadApp`] does it.
 //!
 //! [`RipAndLoadApp`]: crate::app::RipAndLoadApp
 
-use std::path::{Path, PathBuf};
-
 use eframe::egui;
+use ripandload_core::error::error_chain;
 use ripandload_core::settings::{FOLDER_PLACEHOLDERS, Settings, TRACK_PLACEHOLDERS};
 use ripandload_core::source::Source;
+use ripandload_core::start;
 use ripandload_core::tool_env::WSL_RIP;
-use ripandload_core::wsl_path::{from_wsl_share, to_wsl_path};
+
+use crate::path_picker::{PathPicker, Pick};
 
 // == Public API ===============================================================
 
-/// Draws the Settings form into `ui`, in a scroll area, editing `settings`.
-pub fn show(ui: &mut egui::Ui, settings: &mut Settings) {
+/// What the user clicked in the Settings tab this frame.
+pub enum Action {
+    /// Nothing to do.
+    None,
+    /// Save the Settings as edited.
+    Save,
+    /// Start Check tools.
+    CheckTools,
+    /// Start Test connection.
+    TestConnection,
+}
+
+/// Draws the Settings tab into `ui` and returns what the user clicked.
+///
+/// Save is enabled only with unsaved changes. Check tools is enabled
+/// whenever no run is going; Test connection only when, besides, the active
+/// Server is set up, and otherwise its hover text says what's missing. The
+/// form is in a scroll area under the buttons and problems.
+///
+/// # Arguments
+///
+/// - `ui`: where the tab is drawn.
+/// - `settings`: the Settings as edited, edited in place.
+/// - `run_going`: whether a run is going.
+/// - `unsaved`: whether `settings` differ from the saved ones.
+///
+/// # Returns
+///
+/// [`Action::Save`], [`Action::CheckTools`] or [`Action::TestConnection`]
+/// if the user clicked that button this frame, otherwise [`Action::None`].
+pub fn show(ui: &mut egui::Ui, settings: &mut Settings, run_going: bool, unsaved: bool) -> Action {
+    let mut action = Action::None;
+    ui.horizontal(|ui| {
+        if ui.add_enabled(unsaved, egui::Button::new("Save")).clicked() {
+            action = Action::Save;
+        }
+        if unsaved {
+            ui.colored_label(ui.visuals().warn_fg_color, "• unsaved changes");
+        }
+        ui.separator();
+        if ui
+            .add_enabled(!run_going, egui::Button::new("Check tools"))
+            .on_hover_text("Runs rip --version and rsync --version")
+            .clicked()
+        {
+            action = Action::CheckTools;
+        }
+        let server_ready = start::server(settings).map(|_| ());
+        let mut test = ui
+            .add_enabled(
+                !run_going && server_ready.is_ok(),
+                egui::Button::new("Test connection"),
+            )
+            .on_hover_text("Logs in to the Server and checks that the music folder is writable");
+        if let Err(cant) = &server_ready {
+            test = test.on_disabled_hover_text(error_chain(cant));
+        }
+        if test.clicked() {
+            action = Action::TestConnection;
+        }
+    });
+
+    if let Err(problems) = settings.validate() {
+        for problem in problems {
+            ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {problem}"));
+        }
+    }
+
     egui::ScrollArea::vertical().show(ui, |ui| {
         section(ui, "Credentials", |ui| credentials(ui, settings));
         section(ui, "Quality", |ui| quality(ui, settings));
@@ -35,6 +102,7 @@ pub fn show(ui: &mut egui::Ui, settings: &mut Settings) {
         });
         section(ui, "Server", |ui| server(ui, settings));
     });
+    return action;
 }
 
 // == Form sections ============================================================
@@ -90,23 +158,17 @@ fn naming(ui: &mut egui::Ui, settings: &mut Settings) {
 
 /// Draws the Staging folder and tool rows into `ui`, editing `settings`.
 ///
-/// The rows are the Staging folder, with Browse…, and the offer to clear it
-/// after an Upload. Then, on Windows, the WSL distro and `rip`'s path inside
-/// it, with Browse…; elsewhere, `rip`'s path. A Browse… pick inside a distro
-/// sets the WSL distro, if it's unset.
+/// The rows are the Staging folder and the offer to clear it after an
+/// Upload. Then, on Windows, the WSL distro and `rip`'s path inside it;
+/// elsewhere, `rip`'s path.
 fn folders_and_tools(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.label("Staging folder");
-    ui.horizontal(|ui| {
-        path_field(ui, &mut settings.staging_folder, "");
-        if ui.button("Browse…").clicked()
-            && let Some(folder) = rfd::FileDialog::new()
-                .set_directory(&settings.staging_folder)
-                .pick_folder()
-        {
-            adopt_distro(&mut settings.wsl_distro, &folder);
-            settings.staging_folder = folder;
-        }
-    });
+    PathPicker {
+        hint: "",
+        pick: Pick::Folder,
+        inside_wsl: false,
+    }
+    .show(ui, &mut settings.staging_folder, &mut settings.wsl_distro);
     ui.end_row();
 
     ui.label("");
@@ -124,33 +186,29 @@ fn folders_and_tools(ui: &mut egui::Ui, settings: &mut Settings) {
 
         ui.label("streamrip inside WSL")
             .on_hover_text("With pyenv, e.g. ~/.pyenv/versions/<name>/bin/rip");
-        ui.horizontal(|ui| {
-            rip_executable(ui, settings, WSL_RIP);
-            if ui.button("Browse…").clicked()
-                && let Some(file) = rfd::FileDialog::new().pick_file()
-            {
-                // Settings hold rip's path inside WSL, not the Windows one.
-                adopt_distro(&mut settings.wsl_distro, &file);
-                let inside = from_wsl_share(&file)
-                    .map(|(_, inside)| inside)
-                    .or_else(|| to_wsl_path(&file))
-                    .unwrap_or_else(|| file.display().to_string());
-                settings.rip_executable = Some(PathBuf::from(inside));
-            }
-        });
     } else {
         ui.label("streamrip executable");
-        rip_executable(ui, settings, "rip, found on PATH");
     }
+    // On Windows the Settings hold rip's path inside WSL, not the Windows
+    // one.
+    PathPicker {
+        hint: if cfg!(windows) {
+            WSL_RIP
+        } else {
+            "rip, found on PATH"
+        },
+        pick: Pick::File,
+        inside_wsl: cfg!(windows),
+    }
+    .show_optional(ui, &mut settings.rip_executable, &mut settings.wsl_distro);
     ui.end_row();
 }
 
 /// Draws the active Server's rows into `ui`, editing `settings`.
 ///
-/// The rows are the host, user, port, music folder and SSH key, with
-/// Browse… for the key. A key picked inside a distro sets the WSL distro, if
-/// it's unset. If `active_server` is past the list of Servers, the section
-/// says "No Server configured." instead.
+/// The rows are the host, user, port, music folder and SSH key. If
+/// `active_server` is past the list of Servers, the section says "No Server
+/// configured." instead.
 fn server(ui: &mut egui::Ui, settings: &mut Settings) {
     let wsl_distro = &mut settings.wsl_distro;
     let Some(server) = settings.servers.get_mut(settings.active_server) else {
@@ -176,17 +234,12 @@ fn server(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.end_row();
 
     ui.label("SSH key");
-    ui.horizontal(|ui| {
-        let mut key = server.ssh_key.clone().unwrap_or_default();
-        path_field(ui, &mut key, "~/.ssh/id_ed25519");
-        server.ssh_key = (!key.as_os_str().is_empty()).then_some(key);
-        if ui.button("Browse…").clicked()
-            && let Some(file) = rfd::FileDialog::new().pick_file()
-        {
-            adopt_distro(wsl_distro, &file);
-            server.ssh_key = Some(file);
-        }
-    });
+    PathPicker {
+        hint: "~/.ssh/id_ed25519",
+        pick: Pick::File,
+        inside_wsl: false,
+    }
+    .show_optional(ui, &mut server.ssh_key, wsl_distro);
     ui.end_row();
 }
 
@@ -247,66 +300,6 @@ fn template_field(ui: &mut egui::Ui, template: &mut String, placeholders: &[&str
     });
 }
 
-/// Draws a field editing `rip`'s path in `settings` into `ui`.
-///
-/// An empty or all-whitespace field means no path, so the default is used.
-/// A path that isn't valid UTF-8 is shown read-only, since editing its text
-/// would rewrite it.
-///
-/// # Arguments
-///
-/// - `ui`: where the field is drawn.
-/// - `settings`: the Settings whose `rip_executable` the field edits.
-/// - `hint`: the default, shown while the field is empty.
-fn rip_executable(ui: &mut egui::Ui, settings: &mut Settings, hint: &str) {
-    if let Some(path) = settings
-        .rip_executable
-        .as_ref()
-        .filter(|path| path.to_str().is_none())
-    {
-        read_only_path(ui, path);
-        return;
-    }
-    let mut text = settings
-        .rip_executable
-        .as_ref()
-        .map(|path| path.display().to_string())
-        .unwrap_or_default();
-    let edit = egui::TextEdit::singleline(&mut text)
-        .hint_text(hint)
-        .desired_width(f32::INFINITY);
-    if ui.add(edit).changed() {
-        settings.rip_executable = (!text.trim().is_empty()).then(|| PathBuf::from(text));
-    }
-}
-
-/// Draws a field editing `path` into `ui`, showing `hint` while it's empty.
-///
-/// A path that isn't valid UTF-8 is shown read-only, since editing its text
-/// would rewrite it. Browse… can still replace it.
-fn path_field(ui: &mut egui::Ui, path: &mut PathBuf, hint: &str) {
-    if path.to_str().is_none() {
-        read_only_path(ui, path);
-        return;
-    }
-    let mut text = path.display().to_string();
-    if ui
-        .add(egui::TextEdit::singleline(&mut text).hint_text(hint))
-        .changed()
-    {
-        *path = PathBuf::from(text);
-    }
-}
-
-/// Draws `path` into `ui` as text that can't be edited.
-///
-/// For a path that isn't valid UTF-8, shown with the characters it lacks
-/// replaced.
-fn read_only_path(ui: &mut egui::Ui, path: &Path) {
-    let mut text = path.to_string_lossy().into_owned();
-    ui.add(egui::TextEdit::singleline(&mut text).interactive(false));
-}
-
 /// Draws a field editing `value` into `ui`, showing `hint` while it's empty.
 ///
 /// An empty or all-whitespace field sets `value` to `None`.
@@ -317,20 +310,5 @@ fn optional_text(ui: &mut egui::Ui, value: &mut Option<String>, hint: &str) {
         .changed()
     {
         *value = (!text.trim().is_empty()).then_some(text);
-    }
-}
-
-// == Helpers ==================================================================
-
-/// Sets `wsl_distro` to the distro `picked` is in, if it's still unset.
-///
-/// Only on Windows, and only for a file on the WSL share, such as
-/// `\\wsl.localhost\Ubuntu\…`. That way the tools run where the file is.
-fn adopt_distro(wsl_distro: &mut Option<String>, picked: &Path) {
-    if cfg!(windows)
-        && wsl_distro.is_none()
-        && let Some((distro, _)) = from_wsl_share(picked)
-    {
-        *wsl_distro = Some(distro);
     }
 }

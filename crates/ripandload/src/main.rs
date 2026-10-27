@@ -20,6 +20,7 @@
 
 mod app;
 mod download_tab;
+mod path_picker;
 mod settings_tab;
 mod upload_tab;
 mod wording;

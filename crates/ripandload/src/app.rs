@@ -2,10 +2,9 @@
 //!
 //! [`RipAndLoadApp`] is the whole GUI state. Each frame it polls the current
 //! [`Run`], then draws the tab bar, the status bar, the log, rip's
-//! progress bars while a Download shows them, and the open tab. The
-//! Download and Upload tabs only report what the user clicked, as an
-//! `Action`, and the Settings tab's buttons are drawn here. Either way this
-//! module asks [`start::start`] for the run asked for: Check tools, a
+//! progress bars while a Download shows them, and the open tab. The tabs
+//! only report what the user clicked, as an `Action`; this module saves the
+//! Settings or asks [`start::start`] for the run asked for: Check tools, a
 //! Download, an Upload, Compare with Server or Test connection. Only one run
 //! happens at a time, and every run uses the Settings as edited, saved or
 //! not.
@@ -333,53 +332,6 @@ impl RipAndLoadApp {
         }
     }
 
-    /// Draws the Settings tab, with its buttons and problems, into `ui`.
-    ///
-    /// Save, Check tools and Test connection come first, then the Settings'
-    /// problems, then the form itself.
-    fn settings_tab(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let dirty = self.has_unsaved_changes();
-            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
-                self.save_settings();
-            }
-            if dirty {
-                ui.colored_label(ui.visuals().warn_fg_color, "• unsaved changes");
-            }
-            ui.separator();
-            if ui
-                .add_enabled(!self.run_going(), egui::Button::new("Check tools"))
-                .on_hover_text("Runs rip --version and rsync --version")
-                .clicked()
-            {
-                self.start_run(Request::CheckTools);
-            }
-            let server_ready = start::server(&self.settings).map(|_| ());
-            let mut test = ui
-                .add_enabled(
-                    !self.run_going() && server_ready.is_ok(),
-                    egui::Button::new("Test connection"),
-                )
-                .on_hover_text(
-                    "Logs in to the Server and checks that the music folder is writable",
-                );
-            if let Err(cant) = &server_ready {
-                test = test.on_disabled_hover_text(error_chain(cant));
-            }
-            if test.clicked() {
-                self.start_run(Request::TestConnection);
-            }
-        });
-
-        if let Err(problems) = self.settings.validate() {
-            for problem in problems {
-                ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {problem}"));
-            }
-        }
-
-        settings_tab::show(ui, &mut self.settings);
-    }
-
     // == Closing the window ===================================================
 
     /// Asks before the window in `ctx` closes with unsaved changes.
@@ -530,7 +482,18 @@ impl eframe::App for RipAndLoadApp {
                     upload_tab::Action::None => {}
                 }
             }
-            Tab::Settings => self.settings_tab(ui),
+            Tab::Settings => {
+                let run_going = self.run_going();
+                let unsaved = self.has_unsaved_changes();
+                match settings_tab::show(ui, &mut self.settings, run_going, unsaved) {
+                    settings_tab::Action::Save => {
+                        self.save_settings();
+                    }
+                    settings_tab::Action::CheckTools => self.start_run(Request::CheckTools),
+                    settings_tab::Action::TestConnection => self.start_run(Request::TestConnection),
+                    settings_tab::Action::None => {}
+                }
+            }
         });
 
         self.confirm_clear(&ctx);
