@@ -1,6 +1,6 @@
 # 04 – Starting a run: Test connection check and the log
 
-Status: ready-for-agent
+Status: done
 Blocked by: none
 
 Part of `../spec.md`. Candidate 1 of the architecture review (`../../architecture/issues/02-run-start-up.md`) will later move this code into core; fix the behavior now, in place.
@@ -19,3 +19,7 @@ Part of `../spec.md`. Candidate 1 of the architecture review (`../../architectur
 
 - [ ] Checked by hand (the GUI crate has no tests; note what you checked under Comments): Test connection is disabled with an empty host; clicking Upload with no active Server leaves the previous log in place.
 - [ ] `dev/check.sh` passes.
+
+## Comments
+
+Not checked by hand: the session has no display. Read by hand instead: Test connection is enabled only with `!job_running && Server::is_set_up`, `test_connection` guards the same and sets the status, and `upload`, `compare` and `test_connection` clear the log only after their guards. `download` clears before its first `✗` line and before the job starts.

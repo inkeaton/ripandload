@@ -23,7 +23,7 @@ use eframe::egui;
 use ripandload_core::command;
 use ripandload_core::error::error_chain;
 use ripandload_core::job_run::JobRun;
-use ripandload_core::settings::Settings;
+use ripandload_core::settings::{Server, Settings};
 use ripandload_core::staging::{self, Comparison, StagingContents};
 use ripandload_core::streamrip_config::{self, Seeded};
 use ripandload_core::tool_env::ToolEnv;
@@ -37,6 +37,10 @@ const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The status for a run that needs a Server when no active one is set.
 const NO_SERVER: &str = "No Server configured.";
+
+/// The status, and the hover text of a disabled button, for a run that needs
+/// a Server whose host and music folder are still empty.
+const SERVER_NOT_SET_UP: &str = "Set the Server's host and music folder first.";
 
 // == The app ==================================================================
 
@@ -135,7 +139,6 @@ impl RipAndLoadApp {
     /// folder, the config can't be written, or its path can't be translated to
     /// the one `rip` sees, no Download starts and the status bar says why.
     fn download(&mut self) {
-        self.log.clear();
         let tool_env = ToolEnv::from_settings(&self.settings);
         let Some(config) = streamrip_config::default_path() else {
             self.status = "No config folder found; the Streamrip config can't be written.".into();
@@ -154,11 +157,13 @@ impl RipAndLoadApp {
             Err(err) => {
                 tracing::error!(error = %error_chain(&err), "couldn't render the Streamrip config");
                 self.status = error_chain(&err);
+                self.log.clear();
                 self.log.push(format!("✗ {}", self.status));
                 return;
             }
         };
         if let Some(from) = seeded_from {
+            self.log.clear();
             self.log.push(format!(
                 "Created the Streamrip config at {} from {from}",
                 config.display()
@@ -171,10 +176,12 @@ impl RipAndLoadApp {
             Ok(config) => config,
             Err(err) => {
                 self.status = error_chain(&err);
+                self.log.clear();
                 self.log.push(format!("✗ {}", self.status));
                 return;
             }
         };
+        self.log.clear();
         let spec = command::download_spec(&config, &self.download.urls(), self.download.quality);
         let job = JobRun::download(tool_env, spec, &mut self.log);
         self.start_job(job);
@@ -184,11 +191,11 @@ impl RipAndLoadApp {
     ///
     /// Without an active Server, nothing starts and the status bar says so.
     fn upload(&mut self) {
-        self.log.clear();
         let Some(server) = self.settings.active_server() else {
             self.status = NO_SERVER.into();
             return;
         };
+        self.log.clear();
         let job = JobRun::upload(
             ToolEnv::from_settings(&self.settings),
             &self.settings.staging_folder,
@@ -200,13 +207,18 @@ impl RipAndLoadApp {
 
     /// Starts Test connection against the active Server.
     ///
-    /// Without an active Server, nothing starts and the status bar says so.
+    /// Without an active Server, or while its host or music folder is empty,
+    /// nothing starts and the status bar says so.
     fn test_connection(&mut self) {
-        self.log.clear();
         let Some(server) = self.settings.active_server() else {
             self.status = NO_SERVER.into();
             return;
         };
+        if !server.is_set_up() {
+            self.status = SERVER_NOT_SET_UP.into();
+            return;
+        }
+        self.log.clear();
         let job = JobRun::test_connection(
             ToolEnv::from_settings(&self.settings),
             server,
@@ -219,11 +231,11 @@ impl RipAndLoadApp {
     ///
     /// Without an active Server, nothing starts and the status bar says so.
     fn compare(&mut self) {
-        self.log.clear();
         let Some(server) = self.settings.active_server() else {
             self.status = NO_SERVER.into();
             return;
         };
+        self.log.clear();
         let job = JobRun::compare(
             ToolEnv::from_settings(&self.settings),
             &self.settings.staging_folder,
@@ -453,11 +465,19 @@ impl RipAndLoadApp {
             {
                 self.check_tools();
             }
-            if ui
-                .add_enabled(!self.job_running(), egui::Button::new("Test connection"))
-                .on_hover_text("Logs in to the Server and checks that the music folder is writable")
-                .clicked()
-            {
+            let server_ready = self.settings.active_server().is_some_and(Server::is_set_up);
+            let mut test = ui
+                .add_enabled(
+                    !self.job_running() && server_ready,
+                    egui::Button::new("Test connection"),
+                )
+                .on_hover_text(
+                    "Logs in to the Server and checks that the music folder is writable",
+                );
+            if !server_ready {
+                test = test.on_disabled_hover_text(SERVER_NOT_SET_UP);
+            }
+            if test.clicked() {
                 self.test_connection();
             }
         });
