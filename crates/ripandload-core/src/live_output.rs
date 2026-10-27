@@ -1,29 +1,61 @@
 //! A Download's output, as a terminal would show it.
 //!
-//! streamrip draws its progress bars with rich's `Live` display: it hides the
-//! cursor, draws a few rows, and ten times a second goes back to the start
-//! of the row (`\r`), moves the cursor up over the others (`ESC[1A`), clears
-//! each (`ESC[2K`) and draws them again. A log message is printed the same
-//! way, in place of the bars, with the bars drawn again below it. So a row
-//! above where the last redraw started writing will never change again:
-//! that's a finished line for the log. The rows from there down are the live
-//! rows, and when the cursor shows again (`ESC[?25h`) the display is over and
-//! they're dropped, so progress never reaches the log.
+//! streamrip draws its progress bars with rich's `Live` display, which
+//! redraws them in place. [`LiveOutput`] replays the output on a grid of
+//! rows, the way a terminal would, and splits it in two: finished lines,
+//! which never change again and go to the log, and the live rows, which show
+//! progress and never reach the log.
 //!
-//! Only what rich writes is understood: those three sequences, `\r` and `\n`.
-//! Colours, hyperlinks and anything else are skipped.
+//! This module reads no process and writes no log. [`JobRun`] feeds it a
+//! Download's output and decides where the lines go.
+//!
+//! # How rich draws
+//!
+//! rich hides the cursor and draws a few rows. Ten times a second it goes
+//! back to the start of the row (`\r`), moves the cursor up over the others
+//! (`ESC[1A`), clears each (`ESC[2K`) and draws them again. A log message is
+//! printed the same way, in place of the bars, with the bars drawn again
+//! below it. So a row above where the last redraw started writing will never
+//! change again: that's a finished line. The rows from there down are the
+//! live rows, and when the cursor shows again (`ESC[?25h`) the display is
+//! over and they're dropped.
+//!
+//! # What is understood
+//!
+//! - `\r` and `\n`, which move the cursor.
+//! - `ESC[<n>A`, which moves the cursor up.
+//! - `ESC[<n>K`, which clears all or part of a row.
+//! - `ESC[?25l` and `ESC[?25h`, which hide and show the cursor, and so start
+//!   and end the Live display.
+//!
+//! Colors, hyperlinks and anything else are skipped.
+//!
+//! [`JobRun`]: crate::job_run::JobRun
 
+/// The byte that starts an escape sequence.
 const ESC: u8 = 0x1b;
 
-/// Longer than any escape sequence rich writes; a hyperlink is a few hundred bytes.
+/// Bytes kept back for an unfinished escape sequence before it's skipped.
+///
+/// Longer than any escape sequence rich writes; a hyperlink is a few hundred
+/// bytes.
 const MAX_PENDING: usize = 4096;
 
+// == Live output ==============================================================
+
+/// One stream of a Download's output, replayed on a grid of rows.
+///
+/// Feed it the output with [`LiveOutput::feed`], in chunks of any size, then
+/// call [`LiveOutput::finish`] once the process has exited. In between,
+/// [`LiveOutput::live_rows`] shows the Live display. A `default()` value has
+/// an empty grid, with the cursor at the top and the Live display off.
 #[derive(Debug, Default)]
 pub struct LiveOutput {
-    /// The rows not yet handed out as finished lines.
+    /// The rows not yet handed out as finished lines, one `char` per column.
     rows: Vec<Vec<char>>,
-    /// The cursor, as an index into `rows`.
+    /// The cursor's row, as an index into `rows`.
     row: usize,
+    /// The cursor's column, as an index into its row.
     col: usize,
     /// While the Live display is on: the row it starts at.
     live_top: Option<usize>,
@@ -31,25 +63,30 @@ pub struct LiveOutput {
     /// hasn't written anything yet. Until it does, a chunk may have ended
     /// partway up, so `live_top` stays put.
     redrawing: bool,
-    /// The start of an escape sequence or character the last chunk cut off.
+    /// The start of an escape sequence or character the last chunk cut off,
+    /// read again in front of the next chunk.
     pending: Vec<u8>,
 }
 
-/// One step of the output.
-enum Token {
-    Char(char),
-    /// `ESC [ params final`.
-    Csi {
-        params: String,
-        action: char,
-    },
-    /// Any other escape sequence, or a byte that isn't UTF-8.
-    Skip,
-}
-
 impl LiveOutput {
-    /// Takes the next bytes of output, in chunks of any size, and returns the
-    /// lines that are now finished.
+    // == Feeding output =======================================================
+
+    /// Takes the next bytes of output and returns the lines now finished.
+    ///
+    /// A chunk may end partway through an escape sequence or a character;
+    /// that start is kept until the next chunk. An escape sequence still
+    /// unfinished after 4 KiB never ends, so its `ESC` is skipped and the
+    /// rest read as text.
+    ///
+    /// # Arguments
+    ///
+    /// - `bytes`: the next chunk of output, of any size.
+    ///
+    /// # Returns
+    ///
+    /// The rows now above the Live display, or above the cursor when the
+    /// display is off, in order and without trailing spaces. Empty when no
+    /// row was finished.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<String> {
         let mut input = std::mem::take(&mut self.pending);
         input.extend_from_slice(bytes);
@@ -71,8 +108,16 @@ impl LiveOutput {
         self.take_finished()
     }
 
-    /// After the process has exited: everything left over, except a Live
-    /// display that never ended, e.g. after Cancel.
+    /// Returns what's left once the process has exited, and starts over.
+    ///
+    /// A Live display that never ended, e.g. after Cancel, is dropped, so its
+    /// progress never reaches the log, and so is a cut-off escape sequence or
+    /// character left from the last chunk. Afterwards the value is as new.
+    ///
+    /// # Returns
+    ///
+    /// The rows not yet handed out, in order and without trailing spaces,
+    /// leaving out the Live display and any empty rows at the end.
     pub fn finish(&mut self) -> Vec<String> {
         if let Some(top) = self.live_top.take() {
             self.rows.truncate(top);
@@ -85,7 +130,12 @@ impl LiveOutput {
         lines
     }
 
-    /// What the Live display shows right now; empty when it's off.
+    /// Returns the rows the Live display shows right now.
+    ///
+    /// # Returns
+    ///
+    /// The rows from the top of the Live display down, without trailing
+    /// spaces or empty rows at the end. Empty when the display is off.
     pub fn live_rows(&self) -> Vec<String> {
         let Some(top) = self.live_top else {
             return Vec::new();
@@ -97,6 +147,26 @@ impl LiveOutput {
         rows
     }
 
+    /// Removes and returns the finished rows, as [`LiveOutput::feed`] returns.
+    ///
+    /// The cursor and `live_top` move up by as many rows, so they still point
+    /// at the same rows.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build (and wraps in release) when the cursor is
+    /// above the top of the Live display, e.g. after `ESC[?25l` then
+    /// `ESC[2A`. rich never writes that.
+    fn take_finished(&mut self) -> Vec<String> {
+        let done = self.live_top.unwrap_or(self.row).min(self.rows.len());
+        self.row -= done;
+        self.live_top = self.live_top.map(|top| top - done);
+        self.rows.drain(..done).map(|row| text(&row)).collect()
+    }
+
+    // == Drawing on the grid ==================================================
+
+    /// Draws `token` on the grid and moves the cursor, as a terminal would.
     fn apply(&mut self, token: Token) {
         match token {
             Token::Char('\n') => {
@@ -114,8 +184,8 @@ impl LiveOutput {
                     self.put(' ');
                 }
             }
-            // Control characters, and the NULs of a UTF-16 message from wsl.exe,
-            // which then reads as plain ASCII.
+            // Other control characters are dropped, including the NULs of a
+            // UTF-16 message from wsl.exe, which then reads as plain ASCII.
             Token::Char(c) if c.is_control() => {}
             Token::Char(c) => self.put(c),
             Token::Csi { params, action } => self.csi(&params, action),
@@ -123,6 +193,17 @@ impl LiveOutput {
         }
     }
 
+    /// Carries out the CSI sequence `ESC [ params action`.
+    ///
+    /// Understands cursor up (`A`), clearing in the row (`K`), and hiding and
+    /// showing the cursor (`?25l`, `?25h`), which start and end the Live
+    /// display. Any other sequence does nothing.
+    ///
+    /// # Arguments
+    ///
+    /// - `params`: the parameter bytes, e.g. the `2` in `ESC[2K` or the `?25`
+    ///   in `ESC[?25l`. Empty or unreadable means the default, 1 row up.
+    /// - `action`: the final byte, which says what to do.
     fn csi(&mut self, params: &str, action: char) {
         match (params, action) {
             (_, 'A') => {
@@ -151,6 +232,11 @@ impl LiveOutput {
         }
     }
 
+    /// Writes `c` at the cursor and moves the cursor one column right.
+    ///
+    /// A row shorter than the cursor's column is padded with spaces. The
+    /// first character a redraw writes marks where the Live display now
+    /// starts.
     fn put(&mut self, c: char) {
         if std::mem::take(&mut self.redrawing) && self.live_top.is_some() {
             self.live_top = Some(self.row);
@@ -166,29 +252,39 @@ impl LiveOutput {
         self.col += 1;
     }
 
+    /// Returns the cursor's row, adding empty rows down to it if needed.
     fn current_row(&mut self) -> &mut Vec<char> {
         if self.rows.len() <= self.row {
             self.rows.resize(self.row + 1, Vec::new());
         }
         &mut self.rows[self.row]
     }
-
-    /// Hands out the rows above the Live display, or above the cursor when
-    /// there's none.
-    fn take_finished(&mut self) -> Vec<String> {
-        let done = self.live_top.unwrap_or(self.row).min(self.rows.len());
-        self.row -= done;
-        self.live_top = self.live_top.map(|top| top - done);
-        self.rows.drain(..done).map(|row| text(&row)).collect()
-    }
 }
 
-fn text(row: &[char]) -> String {
-    row.iter().collect::<String>().trim_end().to_owned()
+// == Tokens ===================================================================
+
+/// One step of the output: a character or an escape sequence.
+enum Token {
+    /// A character, control characters included.
+    Char(char),
+    /// A CSI sequence, `ESC [ params action`.
+    Csi {
+        /// The parameter and intermediate bytes, e.g. `2` or `?25`.
+        params: String,
+        /// The final byte, which says what to do, e.g. `K`.
+        action: char,
+    },
+    /// Any other escape sequence, or a byte that isn't UTF-8.
+    Skip,
 }
 
-/// The token at the start of `input` and its length in bytes, or `None` if
-/// `input` is empty or ends partway through one.
+/// Reads the token at the start of `input`.
+///
+/// # Returns
+///
+/// The token and its length in bytes, or `None` if `input` is empty or ends
+/// partway through a token. A byte that can't be read as UTF-8 is a
+/// one-byte [`Token::Skip`].
 fn next_token(input: &[u8]) -> Option<(Token, usize)> {
     let first = *input.first()?;
     if first == ESC {
@@ -209,6 +305,17 @@ fn next_token(input: &[u8]) -> Option<(Token, usize)> {
     }
 }
 
+/// Reads the escape sequence at the start of `input`, which starts with `ESC`.
+///
+/// # Returns
+///
+/// The token and its length in bytes:
+///
+/// - a [`Token::Csi`] for `ESC [`;
+/// - a [`Token::Skip`] for an OSC sequence (`ESC ]`, such as a hyperlink),
+///   up to its closing BEL or `ESC \`;
+/// - a two-byte [`Token::Skip`] for any other sequence;
+/// - `None` when `input` ends before the sequence does.
 fn escape(input: &[u8]) -> Option<(Token, usize)> {
     match *input.get(1)? {
         b'[' => {
@@ -233,4 +340,11 @@ fn escape(input: &[u8]) -> Option<(Token, usize)> {
         }
         _ => Some((Token::Skip, 2)),
     }
+}
+
+// == Helpers ==================================================================
+
+/// Returns `row` as a string, without trailing spaces.
+fn text(row: &[char]) -> String {
+    row.iter().collect::<String>().trim_end().to_owned()
 }

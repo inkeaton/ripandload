@@ -1,12 +1,38 @@
-//! `rich13-progress.out` is what streamrip 2.2.0's `ProgressManager` writes
-//! under rich 13.9.4 with `FORCE_COLOR=1 COLUMNS=60`: a log line, two tracks'
-//! progress bars redrawn four times with an error logged halfway, then
-//! another log line.
+//! Checks that [`LiveOutput`] splits recorded streamrip output into log
+//! lines and live rows.
+//!
+//! The fixtures are real recordings of streamrip drawing progress bars. The
+//! tests that read a whole recording feed it in small chunks that cut
+//! through escape sequences and characters.
+//!
+//! # Fixtures
+//!
+//! - `rich13-progress.out`: what streamrip 2.2.0's `ProgressManager` writes
+//!   under rich 13.9.4 with `FORCE_COLOR=1 COLUMNS=60`. A log line, two
+//!   tracks' progress bars redrawn four times with an error logged halfway,
+//!   then another log line.
+//! - `rich13-one-row.out`: recorded the same way, with `RichHandler`'s time
+//!   and path columns off. One track finishes, so only the "Downloading" row
+//!   is left, and an error is logged while the display is that one row high.
+
+#![allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 
 use ripandload_core::live_output::LiveOutput;
 
+// == Fixtures =================================================================
+
+/// Two tracks' progress bars, with lines logged before, during and after.
 const RECORDED: &[u8] = include_bytes!("fixtures/rich13-progress.out");
 
+/// A Live display that shrinks to one row, with a line logged while it is.
+///
+/// A one-row redraw doesn't move the cursor up; it only goes back to the
+/// row's start.
+const ONE_ROW: &[u8] = include_bytes!("fixtures/rich13-one-row.out");
+
+// == Recorded progress ========================================================
+
+/// Log lines come out, in order, and no progress bar does.
 #[test]
 fn log_lines_come_out_and_progress_does_not() {
     let mut output = LiveOutput::default();
@@ -29,6 +55,7 @@ fn log_lines_come_out_and_progress_does_not() {
     assert!(output.live_rows().is_empty());
 }
 
+/// The live rows show every row of the latest frame, its last one included.
 #[test]
 fn live_rows_show_the_whole_latest_frame() {
     // Up to the redraw that follows the 50% frame. rich ends a frame without
@@ -52,6 +79,7 @@ fn live_rows_show_the_whole_latest_frame() {
     assert!(rows[2].contains("50.0%"), "{rows:#?}");
 }
 
+/// A Download cut off mid-display leaves no progress in the finished lines.
 #[test]
 fn a_cancelled_download_leaves_no_progress_behind() {
     let last_redraw = RECORDED.iter().rposition(|byte| *byte == b'\r').unwrap();
@@ -62,12 +90,7 @@ fn a_cancelled_download_leaves_no_progress_behind() {
     assert!(output.live_rows().is_empty());
 }
 
-/// Recorded like `rich13-progress.out`, with RichHandler's time and path
-/// columns off: one track finishes, so only the "Downloading" row is left,
-/// and an error is logged while the display is that one row high. A one-row
-/// redraw doesn't move the cursor up; it only goes back to the row's start.
-const ONE_ROW: &[u8] = include_bytes!("fixtures/rich13-one-row.out");
-
+/// A line logged while the Live display is one row high still comes out.
 #[test]
 fn a_line_logged_while_the_display_is_one_row_reaches_the_log() {
     let mut output = LiveOutput::default();
@@ -86,6 +109,9 @@ fn a_line_logged_while_the_display_is_one_row_reaches_the_log() {
     );
 }
 
+// == Broken output ============================================================
+
+/// The text after an escape sequence that never ends still comes out.
 #[test]
 fn an_escape_sequence_that_never_ends_doesnt_swallow_the_rest() {
     let mut input = b"\x1b]8;".to_vec();
