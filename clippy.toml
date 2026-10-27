@@ -1,3 +1,6 @@
 # `# Errors` and `# Panics` are required on private items too
 # (docs/style/comments-rust.md).
 check-private-items = true
+
+# Source names from GLOSSARY.md that `doc_markdown` would take for code.
+doc-valid-idents = ["SoundCloud", ".."]
