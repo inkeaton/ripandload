@@ -13,7 +13,7 @@ Two agreed comment style guides in the repo: `docs/style/comments.md` (code-agno
 - Settled while charting:
   - The new style **replaces** the current terse one outright; existing comments get rewritten, not just added to.
   - Scope: every `.rs` file, `tests/` included. Shell scripts, fixtures and `Cargo.toml` are not in scope.
-  - Comments only: no code-layout changes (no aligned `=` / parameter columns); code stays rustfmt-clean.
+  - Comments only: no code-layout changes (no aligned `=` / parameter columns); code stays rustfmt-clean. Exception: pure moves of items into their sections (decided in the code-agnostic guide ticket).
   - Audience: read in source first, but must render cleanly with `cargo doc --document-private-items`.
   - Doc prose uses `GLOSSARY.md` terms; glossary gaps found along the way are noted, not fixed here.
   - Lint enforcement is in scope, with an allowlist for lints that fight readability (e.g. `clippy::needless_return`: the user keeps explicit `return`s).
@@ -22,6 +22,7 @@ Two agreed comment style guides in the repo: `docs/style/comments.md` (code-agno
 ## Decisions so far
 
 - [Rustdoc and clippy conventions for doc comments](issues/01-rustdoc-clippy-conventions.md): Google `Args:` blocks break in rustdoc, so use Markdown lists and the standard `# Errors`/`# Panics` sections. Doc lints are opt-in via `[workspace.lints]`. Stable rustfmt can't enforce comment width. Dividers must be plain `//`.
+- [Code-agnostic comment style guide](issues/02-code-agnostic-guide.md): `docs/style/comments.md` is agreed. It covers the header, `== Title ===` dividers to column 80, item docs (third-person summary, then Arguments/Returns/Errors/... sections), a one-line form for simple private items and tests, and pure moves allowed to group items into sections.
 
 ## Not yet specified
 
