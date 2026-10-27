@@ -7,20 +7,36 @@
 //! message that says what to check. The app polls it each frame; nothing
 //! here blocks.
 //!
+//! What sets one kind of run apart is its `Kind`, one file per kind under
+//! `run/`: its name, its commands, which lines it keeps or turns into
+//! problems, the hints for its failures, and the [`Outcome`] it ends with.
+//! A kind never touches the log. It hands back `Note`s, which the Run writes
+//! and counts. The Run keeps the queue, polling, Cancel, the status bar's
+//! wording, and the two hints that are about WSL rather than a kind.
+//!
 //! Check tools carries on after a problem, so one missing tool doesn't hide
 //! the others. Every other run stops at its first problem.
 //!
-//! When its last command ends, a run works out its [`Outcome`]: what the app
-//! has to catch up with, such as the Comparison an Upload or Compare with
-//! Server leaves. For those two, it builds the Comparison from what was in
-//! the Staging folder when it started, so a file that arrives meanwhile
+//! When its last command ends, a run asks its kind for its [`Outcome`]:
+//! what the app has to catch up with, such as the Comparison an Upload or
+//! Compare with Server leaves. For those two, it's built from what was in
+//! the Staging folder when the run started, so a file that arrives meanwhile
 //! isn't counted as on the Server.
 //!
-//! This module builds no command lines: they come from [`command`], and
-//! [`ToolEnv`] turns them into processes. It doesn't read the Staging folder
-//! either: [`start::start`] reads it and hands it over. The log here is the
-//! one the app shows; what reaches the log file goes through `tracing`,
-//! which the GUI sets up.
+//! This module builds no command lines of its own: they come from
+//! [`command`], and [`ToolEnv`] turns them into processes. It doesn't read
+//! the Staging folder either: [`start::start`] reads it and hands it over.
+//! The log here is the one the app shows; what reaches the log file goes
+//! through `tracing`, which the GUI sets up.
+//!
+//! # Kinds
+//!
+//! - `check_tools`: Check tools, with the rip version and the pyenv probe.
+//! - `download`: a Download, with rip's Live display.
+//! - `upload`: an Upload.
+//! - `compare`: Compare with Server, with the files an Upload would send.
+//! - `test_connection`: Test connection.
+//! - `server`: the hint the three Server runs share.
 //!
 //! # Log lines
 //!
@@ -33,73 +49,34 @@
 //! - `→ ...`: a hint, such as where Check tools found streamrip.
 //! - `Cancelled.`: the current command was cancelled.
 //!
+//! [`command`]: crate::command
 //! [`start::start`]: crate::start::start
+
+mod check_tools;
+mod compare;
+mod download;
+mod server;
+mod test_connection;
+mod upload;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 
-use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
+use crate::command::CommandSpec;
 use crate::error::error_chain;
-use crate::live_output::LiveOutput;
 use crate::process::{Exit, Process, ProcessEvent, Stream};
 use crate::staging::{Comparison, StagingContents};
 use crate::tool_env::ToolEnv;
 
-/// ssh's exit code when it couldn't connect or log in.
-const SSH_FAILED: i32 = 255;
+pub(crate) use check_tools::CheckTools;
+pub(crate) use compare::Compare;
+pub(crate) use download::Download;
+pub(crate) use test_connection::TestConnection;
+pub(crate) use upload::Upload;
 
 /// The shell's exit code when the program doesn't exist (inside WSL).
 const SHELL_NOT_FOUND: i32 = 127;
-
-// == Kinds of run =============================================================
-
-/// Which run a [`Run`] is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    /// Check tools.
-    CheckTools,
-    /// A Download.
-    Download,
-    /// An Upload.
-    Upload,
-    /// Compare with Server.
-    Compare,
-    /// Test connection.
-    TestConnection,
-}
-
-impl Kind {
-    /// Returns the run's name, as the status bar shows it.
-    fn name(self) -> &'static str {
-        match self {
-            Kind::CheckTools => "Check tools",
-            Kind::Download => "Download",
-            Kind::Upload => "Upload",
-            Kind::Compare => "Compare with Server",
-            Kind::TestConnection => "Test connection",
-        }
-    }
-
-    /// Returns whether the run ends at its first problem.
-    ///
-    /// Check tools carries on, so one missing tool doesn't hide the others;
-    /// every other run stops.
-    fn stops_at_first_problem(self) -> bool {
-        self != Kind::CheckTools
-    }
-
-    /// Returns whether the run ends with a Comparison when it succeeds, so
-    /// it needs what was in the Staging folder when it started.
-    pub(crate) fn ends_with_comparison(self) -> bool {
-        return matches!(self, Kind::Upload | Kind::Compare);
-    }
-
-    /// Returns whether success reads "finished" rather than "all good".
-    fn says_finished(self) -> bool {
-        matches!(self, Kind::Download | Kind::Upload | Kind::Compare)
-    }
-}
 
 // == Outcomes =================================================================
 
@@ -134,26 +111,16 @@ pub enum Outcome {
 ///
 /// [`start::start`]: crate::start::start
 pub struct Run {
-    /// Which run this is, which decides its status bar text and its messages.
-    kind: Kind,
+    /// Which run this is, which reads its output and decides its messages.
+    kind: Box<dyn Kind>,
     /// Where the tools run, natively or inside WSL.
     tool_env: ToolEnv,
     /// The commands still to run, next first.
     queue: VecDeque<CommandSpec>,
     /// The command running now and its process; `None` once the run is over.
     current: Option<(CommandSpec, Process)>,
-    /// The version `rip --version` printed, if the current step is that.
-    rip_version: Option<String>,
-    /// For Compare with Server: the files an Upload would send, relative to
-    /// the Staging folder.
-    to_send: Vec<PathBuf>,
-    /// For an Upload or Compare with Server: what was in the Staging folder
-    /// when it started.
-    staging_at_start: Option<StagingAtStart>,
     /// How the run ended, from when it ends until [`Run::take_outcome`].
     outcome: Option<Outcome>,
-    /// While `rip` downloads: its output, progress bars and all.
-    live: Option<RipOutput>,
     /// How many problems were logged so far.
     problems: usize,
     /// Whether [`Run::cancel`] was called.
@@ -165,8 +132,8 @@ impl Run {
 
     /// Starts a run of `kind` with the first of `specs` that can start.
     ///
-    /// [`start::start`] calls this once it has built the commands. A run
-    /// whose commands all fail to spawn is already finished when this
+    /// [`start::start`] calls this once the kind has built its commands. A
+    /// run whose commands all fail to spawn is already finished when this
     /// returns, with the problems in the log.
     ///
     /// # Arguments
@@ -175,17 +142,14 @@ impl Run {
     /// - `tool_env`: where the tools run.
     /// - `specs`: the commands to run, in order. Empty starts nothing, and
     ///   the run is over at once.
-    /// - `staging_at_start`: for an Upload or Compare with Server, what is in
-    ///   the Staging folder now. Without it, neither ends with a Comparison.
     /// - `log`: the log, which gets the first command line, or why the
     ///   commands couldn't start.
     ///
     /// [`start::start`]: crate::start::start
     pub(crate) fn new(
-        kind: Kind,
+        kind: Box<dyn Kind>,
         tool_env: ToolEnv,
         specs: Vec<CommandSpec>,
-        staging_at_start: Option<StagingAtStart>,
         log: &mut Vec<String>,
     ) -> Self {
         let mut run = Self {
@@ -193,11 +157,7 @@ impl Run {
             tool_env,
             queue: specs.into(),
             current: None,
-            rip_version: None,
-            to_send: Vec::new(),
-            staging_at_start,
             outcome: None,
-            live: None,
             problems: 0,
             cancelled: false,
         };
@@ -224,21 +184,13 @@ impl Run {
             match event {
                 ProcessEvent::Line(line) => self.on_line(line, log),
                 ProcessEvent::Output { stream, bytes } => {
-                    let lines = self
-                        .live
-                        .as_mut()
-                        .map(|live| live.for_stream(stream).feed(&bytes));
-                    for line in lines.into_iter().flatten() {
+                    for line in self.kind.on_output(stream, &bytes) {
                         self.on_line(line, log);
                     }
                 }
                 ProcessEvent::Finished(exit) => {
-                    if let Some(live) = self.live.take() {
-                        for mut output in [live.stdout, live.stderr] {
-                            for line in output.finish() {
-                                self.on_line(line, log);
-                            }
-                        }
+                    for line in self.kind.finish_output() {
+                        self.on_line(line, log);
                     }
                     self.on_finished(exit, log);
                 }
@@ -304,11 +256,10 @@ impl Run {
     ///
     /// The rows of rip's Live display, from [`LiveOutput::live_rows`]. Empty
     /// for any other run, and once the Download is over.
+    ///
+    /// [`LiveOutput::live_rows`]: crate::live_output::LiveOutput::live_rows
     pub fn live_rows(&self) -> Vec<String> {
-        self.live
-            .as_ref()
-            .map(|live| live.stdout.live_rows())
-            .unwrap_or_default()
+        return self.kind.live_rows();
     }
 
     /// Returns the status bar's text: what runs now, or how the run ended.
@@ -341,15 +292,12 @@ impl Run {
     /// Each command line is written to `log` before it starts. A command that
     /// can't start is logged as a problem, and the next one is tried unless
     /// the run stops at its first problem. When none is left, the run is
-    /// over, and its [`Outcome`] is worked out.
+    /// over, and its kind gives its [`Outcome`].
     fn start_next(&mut self, log: &mut Vec<String>) {
         while let Some(spec) = self.queue.pop_front() {
             tracing::info!("$ {spec}");
             log.push(format!("$ {spec}"));
-            // A Download's progress bars redraw themselves, so it's read as
-            // it comes.
-            let raw = self.kind == Kind::Download && spec.program == Tool::Rip;
-            let spawn = if raw {
+            let spawn = if self.kind.reads_raw(&spec) {
                 Process::spawn_raw
             } else {
                 Process::spawn
@@ -361,37 +309,16 @@ impl Run {
                 .and_then(|command| spawn(command).map_err(|err| error_chain(&err)));
             match process {
                 Ok(process) => {
-                    self.live = raw.then(RipOutput::default);
                     self.current = Some((spec, process));
                     return;
                 }
-                Err(message) if self.tool_env.is_wsl() => self.problem(
-                    log,
-                    format!("✗ {message}; is WSL installed? (`wsl --install` in PowerShell)"),
-                ),
-                Err(message) => self.problem(log, format!("✗ {message}")),
+                Err(message) => {
+                    let line = spawn_failure_line(&message, self.tool_env.is_wsl());
+                    self.problem(log, line);
+                }
             }
         }
-        self.outcome = Some(self.outcome_at_end());
-    }
-
-    /// Returns the [`Outcome`] of the run, which has just ended.
-    ///
-    /// It uses up what was in the Staging folder at the start. A Comparison
-    /// holds the files that were there then, but is dated now, when the run
-    /// ended.
-    fn outcome_at_end(&mut self) -> Outcome {
-        let succeeded = self.succeeded();
-        match (self.kind, self.staging_at_start.take()) {
-            (Kind::Download, _) => return Outcome::Downloaded,
-            (Kind::Compare, Some(at_start)) if succeeded => {
-                return Outcome::Compared(at_start.comparison(&self.to_send));
-            }
-            (Kind::Upload, Some(at_start)) if succeeded => {
-                return Outcome::Uploaded(at_start.comparison(&[]));
-            }
-            _ => return Outcome::Nothing,
-        }
+        self.outcome = Some(self.kind.outcome(self.succeeded()));
     }
 
     /// Writes `message` to `log` as a problem and counts it.
@@ -407,39 +334,29 @@ impl Run {
         }
     }
 
+    /// Writes `notes` to `log`, in order, counting each problem.
+    fn write_notes(&mut self, notes: Vec<Note>, log: &mut Vec<String>) {
+        for note in notes {
+            match note {
+                Note::Line(line) => {
+                    tracing::info!("{line}");
+                    log.push(line);
+                }
+                Note::Problem(message) => self.problem(log, message),
+            }
+        }
+    }
+
     // == Output ===============================================================
 
-    /// Handles `line`, one line of the current command's output.
-    ///
-    /// Most lines go to `log` as they are. Compare with Server keeps the
-    /// files an Upload would send instead of logging them. The pyenv probe's
-    /// lines become a hint, and Check tools notes the version
-    /// `rip --version` prints.
+    /// Handles `line`, one line of the current command's output, by writing
+    /// to `log` what the kind makes of it.
     fn on_line(&mut self, line: String, log: &mut Vec<String>) {
-        // One line per file would bury the log on a first comparison.
-        if self.kind == Kind::Compare
-            && let Some(file) = command::itemized_file(&line)
-        {
-            self.to_send.push(PathBuf::from(file));
-            return;
-        }
-        if let Some((spec, _)) = &self.current
-            && *spec == command::pyenv_probe_spec()
-        {
-            log.push(format!(
-                "→ found streamrip at {line}; to use it, put that path in Settings"
-            ));
-            return;
-        }
-        if self.kind == Kind::CheckTools
-            && let Some((spec, _)) = &self.current
-            && spec.program == Tool::Rip
-            && let Some(version) = command::parse_rip_version(&line)
-        {
-            self.rip_version = Some(version.to_owned());
-        }
-        tracing::info!("{line}");
-        log.push(line);
+        let notes = match &self.current {
+            Some((spec, _)) => self.kind.on_line(spec, line),
+            None => vec![Note::Line(line)],
+        };
+        self.write_notes(notes, log);
     }
 
     // == Finished commands ====================================================
@@ -447,36 +364,33 @@ impl Run {
     /// Writes to `log` how the current command ended, given its `exit`,
     /// then starts the next command.
     ///
-    /// - Success logs nothing, except after Check tools' `rip --version`,
-    ///   which goes on to [`Run::check_rip_version`].
+    /// - Success logs what the kind has to say, often nothing.
     /// - A failure with an exit code is a problem, with a hint from
-    ///   [`Run::failure_message`]. When the WSL check fails, nothing else
-    ///   runs. When Check tools finds no `rip` inside WSL, the pyenv probe
-    ///   runs next.
+    ///   [`failure_line`]. The kind may then stop the run, or put a command
+    ///   in front of the queue.
     /// - A failure without an exit code is a problem too.
     /// - Cancel logs `Cancelled.`.
     ///
-    /// The pyenv probe never counts as a problem, however it ends.
+    /// A command the kind says ends quietly logs nothing, however it ends.
     fn on_finished(&mut self, exit: Exit, log: &mut Vec<String>) {
         let Some((spec, _)) = self.current.take() else {
             return;
         };
         tracing::info!(?exit, "{spec} ended");
         match exit {
-            // Finding nothing isn't a problem of its own.
-            _ if spec == command::pyenv_probe_spec() => {}
-            Exit::Succeeded if self.kind == Kind::CheckTools && spec.program == Tool::Rip => {
-                self.check_rip_version(log)
+            _ if self.kind.ends_quietly(&spec) => {}
+            Exit::Succeeded => {
+                let notes = self.kind.on_success(&spec);
+                self.write_notes(notes, log);
             }
-            Exit::Succeeded => {}
             Exit::Failed { code: Some(code) } => {
-                let message = self.failure_message(&spec, code);
-                self.problem(log, message);
-                if spec == command::wsl_check_spec() {
-                    // Nothing else can run either.
-                    self.queue.clear();
-                } else if self.kind == Kind::CheckTools && self.rip_missing_in_wsl(&spec, code) {
-                    self.queue.push_front(command::pyenv_probe_spec());
+                let wsl = self.tool_env.is_wsl();
+                let Failure { hint, next } = self.kind.on_failure(&spec, code, wsl);
+                self.problem(log, failure_line(&spec, code, hint, wsl));
+                match next {
+                    Next::CarryOn => {}
+                    Next::StopAll => self.queue.clear(),
+                    Next::RunFirst(first) => self.queue.push_front(first),
                 }
             }
             Exit::Failed { code: None } => {
@@ -488,74 +402,129 @@ impl Run {
         }
         self.start_next(log);
     }
+}
 
-    /// Writes to `log` whether `rip --version` printed the expected version.
-    ///
-    /// A `✓` line when it's [`STREAMRIP_VERSION`]; otherwise a problem, for
-    /// another version or none found.
-    fn check_rip_version(&mut self, log: &mut Vec<String>) {
-        match self.rip_version.take() {
-            Some(version) if version == STREAMRIP_VERSION => {
-                log.push(format!("✓ streamrip {version}"));
-            }
-            Some(version) => self.problem(
-                log,
-                format!(
-                    "⚠ streamrip {version} found, but ripandload is made for {STREAMRIP_VERSION}"
-                ),
-            ),
-            None => self.problem(
-                log,
-                "⚠ couldn't tell which streamrip version this is".into(),
-            ),
-        }
+// == Kinds of run =============================================================
+
+/// What sets one kind of [`Run`] apart: its name, how it reads its output,
+/// its failures' hints and its [`Outcome`].
+///
+/// Each kind builds its own commands in its constructor. Its hooks never
+/// touch the log: they return [`Note`]s or lines, which the Run writes. Every
+/// hook but [`Kind::name`] has a default that fits most kinds.
+pub(crate) trait Kind {
+    /// Returns the run's name, as the status bar shows it.
+    fn name(&self) -> &'static str;
+
+    /// Returns whether success reads "finished" rather than "all good".
+    fn says_finished(&self) -> bool {
+        return false;
     }
 
-    /// Returns the log line for a command that failed.
+    /// Returns whether the run ends at its first problem.
+    fn stops_at_first_problem(&self) -> bool {
+        return true;
+    }
+
+    /// Returns whether `spec`'s output is read as it comes, as raw bytes
+    /// for [`Kind::on_output`], rather than line by line.
+    fn reads_raw(&self, _spec: &CommandSpec) -> bool {
+        return false;
+    }
+
+    /// Takes `bytes`, the next chunk of a raw command's `stream`.
+    ///
+    /// # Returns
+    ///
+    /// The lines now finished, each then handled by [`Kind::on_line`].
+    fn on_output(&mut self, _stream: Stream, _bytes: &[u8]) -> Vec<String> {
+        return Vec::new();
+    }
+
+    /// Returns what's left of a raw command's output once it has exited,
+    /// as lines for [`Kind::on_line`].
+    fn finish_output(&mut self) -> Vec<String> {
+        return Vec::new();
+    }
+
+    /// Returns the rows of the Live display the current command shows.
+    fn live_rows(&self) -> Vec<String> {
+        return Vec::new();
+    }
+
+    /// Reads `line`, one line of `spec`'s output.
+    ///
+    /// # Returns
+    ///
+    /// What the log gets for it: by default, the line as it is.
+    fn on_line(&mut self, _spec: &CommandSpec, line: String) -> Vec<Note> {
+        return vec![Note::Line(line)];
+    }
+
+    /// Returns whether how `spec` ends goes unsaid: never logged, never a
+    /// problem, so its hooks for ending aren't called.
+    fn ends_quietly(&self, _spec: &CommandSpec) -> bool {
+        return false;
+    }
+
+    /// Returns what the log gets once `spec` has succeeded.
+    fn on_success(&mut self, _spec: &CommandSpec) -> Vec<Note> {
+        return Vec::new();
+    }
+
+    /// Returns what to say and do about `spec` failing with exit `code`.
+    ///
+    /// The failure is a problem whatever this returns.
     ///
     /// # Arguments
     ///
     /// - `spec`: the command that failed.
     /// - `code`: its exit code.
-    ///
-    /// # Returns
-    ///
-    /// `✗ <command> failed with exit code <code>`, followed by a hint when
-    /// the code says what to check: WSL not working, a tool missing inside
-    /// WSL, the Server out of reach, or the music folder not writable.
-    fn failure_message(&self, spec: &CommandSpec, code: i32) -> String {
-        let failed = format!("✗ {spec} failed with exit code {code}");
-        if *spec == command::wsl_check_spec() {
-            return format!(
-                "{failed}: couldn't run anything inside WSL; check that WSL is installed \
-                 and the WSL distro in Settings exists (see wsl.exe's message above)"
-            );
-        }
-        let hint = match (self.kind, code) {
-            _ if self.rip_missing_in_wsl(spec, code) => {
-                "streamrip isn't where Settings say inside WSL; follow the WSL setup steps, \
-                 or set its path in Settings (with pyenv, e.g. ~/.pyenv/versions/<name>/bin/rip)"
-            }
-            (_, SHELL_NOT_FOUND) if self.tool_env.is_wsl() => {
-                return format!(
-                    "{failed}: {} isn't installed inside WSL; follow the WSL setup steps",
-                    spec.program.name()
-                );
-            }
-            (Kind::TestConnection | Kind::Upload | Kind::Compare, SSH_FAILED) => {
-                "couldn't reach or log in to the Server; check its host, port, user and SSH key"
-            }
-            (Kind::TestConnection, _) => "the music folder doesn't exist or isn't writable",
-            _ => return failed,
-        };
-        format!("{failed}: {hint}")
+    /// - `wsl`: whether the tools run inside WSL.
+    fn on_failure(&mut self, _spec: &CommandSpec, _code: i32, _wsl: bool) -> Failure {
+        return Failure::default();
     }
 
-    /// Returns whether `spec` ran `rip` inside WSL and exited with `code`
-    /// because no `rip` was there.
-    fn rip_missing_in_wsl(&self, spec: &CommandSpec, code: i32) -> bool {
-        self.tool_env.is_wsl() && spec.program == Tool::Rip && code == SHELL_NOT_FOUND
+    /// Returns the run's [`Outcome`], now that its last command has ended.
+    ///
+    /// It's called once. A Comparison it builds is dated now.
+    ///
+    /// # Arguments
+    ///
+    /// - `succeeded`: whether the run had no problem and wasn't cancelled.
+    fn outcome(&mut self, _succeeded: bool) -> Outcome {
+        return Outcome::Nothing;
     }
+}
+
+/// A line a kind has for the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Note {
+    /// A line written as it is.
+    Line(String),
+    /// A line written and counted as a problem.
+    Problem(String),
+}
+
+/// What a kind says about a failed command.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Failure {
+    /// What to check, after the failure line; `None` leaves it to the Run.
+    pub(crate) hint: Option<String>,
+    /// What the Run does next.
+    pub(crate) next: Next,
+}
+
+/// What a [`Run`] does after a failed command.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum Next {
+    /// The rest of the queue, unless the run stops at its first problem.
+    #[default]
+    CarryOn,
+    /// Nothing else: the queue is dropped.
+    StopAll,
+    /// This command, then the rest of the queue.
+    RunFirst(CommandSpec),
 }
 
 // == What a Run starts with ===================================================
@@ -582,26 +551,104 @@ impl StagingAtStart {
     }
 }
 
-// == Internal types ===========================================================
+// == Helpers ==================================================================
 
-/// rip's stdout and stderr, each replayed on its own [`LiveOutput`].
+/// Returns the log line for a command that failed.
 ///
-/// They're read apart so neither lands in the middle of a line of the
-/// other. rich draws on stdout; stderr is only Python's own complaints.
-#[derive(Debug, Default)]
-struct RipOutput {
-    /// rip's stdout, with the progress bars.
-    stdout: LiveOutput,
-    /// rip's stderr.
-    stderr: LiveOutput,
+/// # Arguments
+///
+/// - `spec`: the command that failed.
+/// - `code`: its exit code.
+/// - `hint`: the kind's hint, which comes first.
+/// - `wsl`: whether the tools run inside WSL.
+///
+/// # Returns
+///
+/// `✗ <command> failed with exit code <code>`, followed by `hint` when
+/// there is one; else, inside WSL with [`SHELL_NOT_FOUND`], a hint that the
+/// tool isn't installed there.
+fn failure_line(spec: &CommandSpec, code: i32, hint: Option<String>, wsl: bool) -> String {
+    let failed = format!("✗ {spec} failed with exit code {code}");
+    let hint = hint.or_else(|| {
+        (wsl && code == SHELL_NOT_FOUND).then(|| {
+            format!(
+                "{} isn't installed inside WSL; follow the WSL setup steps",
+                spec.program.name()
+            )
+        })
+    });
+    match hint {
+        Some(hint) => return format!("{failed}: {hint}"),
+        None => return failed,
+    }
 }
 
-impl RipOutput {
-    /// Returns the output that `stream`'s bytes feed.
-    fn for_stream(&mut self, stream: Stream) -> &mut LiveOutput {
-        match stream {
-            Stream::Stdout => &mut self.stdout,
-            Stream::Stderr => &mut self.stderr,
-        }
+/// Returns the log line for a command that couldn't spawn, given why in
+/// `message`, with a hint to install WSL when `wsl` says the tools run there.
+fn spawn_failure_line(message: &str, wsl: bool) -> String {
+    if wsl {
+        return format!("✗ {message}; is WSL installed? (`wsl --install` in PowerShell)");
+    }
+    return format!("✗ {message}");
+}
+
+// == Tests ====================================================================
+
+#[cfg(test)]
+#[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
+mod tests {
+    use super::*;
+    use crate::command;
+
+    // == Failed commands ======================================================
+
+    /// A kind's hint comes before the one about a tool missing inside WSL.
+    #[test]
+    fn the_kinds_hint_comes_first() {
+        let spec = command::wsl_check_spec();
+
+        let line = failure_line(&spec, SHELL_NOT_FOUND, Some("check this".into()), true);
+
+        assert_eq!(line, "✗ sh -c true failed with exit code 127: check this");
+    }
+
+    /// Without a kind's hint, exit 127 inside WSL says the tool isn't
+    /// installed there.
+    #[test]
+    fn exit_127_inside_wsl_says_the_tool_is_missing() {
+        let spec = command::version_specs().remove(1);
+
+        let line = failure_line(&spec, SHELL_NOT_FOUND, None, true);
+
+        assert_eq!(
+            line,
+            "✗ rsync --version failed with exit code 127: rsync isn't installed \
+             inside WSL; follow the WSL setup steps"
+        );
+    }
+
+    /// Natively, exit 127 has no hint of its own.
+    #[test]
+    fn exit_127_natively_has_no_hint() {
+        let spec = command::version_specs().remove(1);
+
+        let line = failure_line(&spec, SHELL_NOT_FOUND, None, false);
+
+        assert_eq!(line, "✗ rsync --version failed with exit code 127");
+    }
+
+    // == Commands that can't spawn ============================================
+
+    /// A command that can't spawn inside WSL asks whether WSL is installed.
+    #[test]
+    fn spawn_failure_inside_wsl_asks_about_wsl() {
+        assert_eq!(
+            spawn_failure_line("couldn't start wsl.exe", true),
+            "✗ couldn't start wsl.exe; is WSL installed? (`wsl --install` in PowerShell)"
+        );
+        assert_eq!(
+            spawn_failure_line("couldn't start rip", false),
+            "✗ couldn't start rip"
+        );
     }
 }

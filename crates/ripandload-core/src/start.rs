@@ -1,25 +1,28 @@
 //! Starting a Run from the Settings and what the user asked for.
 //!
 //! [`start`] is the one way to start a Run. It clears the Log, works out
-//! everything the Run's kind needs from the Settings, builds its commands
-//! and hands them to `Run::new`. Whatever can go wrong before the first
-//! process spawns is a [`CantStart`], and no Run exists then; a Run that
-//! exists has spawned a process, or failed to spawn one.
+//! everything the Run's kind needs from the Settings and the disk, has the
+//! kind build its commands, and hands both to `Run::new`. Whatever can go
+//! wrong before the first process spawns is a [`CantStart`], and no Run
+//! exists then; a Run that exists has spawned a process, or failed to spawn
+//! one.
 //!
 //! A Download also gets the Streamrip config ready here: rendered from the
 //! Settings, seeded on the first Download, and its path converted for `rip`.
 //! An Upload or Compare with Server reads what's in the Staging folder, for
 //! the Comparison the Run builds when it ends.
 //!
-//! This module builds no command lines of its own (they come from
-//! [`command`]) and runs nothing past `Run::new`. It shows nothing either:
-//! the app puts a [`CantStart`] in the Status bar.
+//! This module builds no command lines (each kind of Run builds its own,
+//! from [`command`]) and runs nothing past `Run::new`. It shows nothing
+//! either: the app puts a [`CantStart`] in the Status bar.
+//!
+//! [`command`]: crate::command
 
 use std::path::{Path, PathBuf};
 
-use crate::command::{self, CommandSpec};
+use crate::command::CommandSpec;
 use crate::error::{CantStart, error_chain};
-use crate::run::{Kind, Run, StagingAtStart};
+use crate::run::{CheckTools, Compare, Download, Kind, Run, TestConnection, Upload};
 use crate::settings::{Server, Settings};
 use crate::staging::StagingContents;
 use crate::streamrip_config::{self, Seeded};
@@ -173,12 +176,8 @@ fn start_in(
     log: &mut Vec<String>,
 ) -> Result<Run, CantStart> {
     log.clear();
-    let ready = commands(&tool_env, settings, request, places, log).and_then(|(kind, specs)| {
-        let at_start = staging_at_start(kind, settings)?;
-        return Ok((kind, specs, at_start));
-    });
-    match ready {
-        Ok((kind, specs, at_start)) => return Ok(Run::new(kind, tool_env, specs, at_start, log)),
+    match kind_and_commands(&tool_env, settings, request, places, log) {
+        Ok((kind, specs)) => return Ok(Run::new(kind, tool_env, specs, log)),
         Err(cant) => {
             let message = format!("✗ {}", error_chain(&cant));
             tracing::warn!("{message}");
@@ -190,7 +189,10 @@ fn start_in(
     }
 }
 
-/// Returns the kind of Run `request` is and its commands, in order.
+/// Returns the kind of Run `request` is, with its commands, in order.
+///
+/// The kind builds its own commands; this gets it what it needs from the
+/// Settings and the disk first.
 ///
 /// # Arguments
 ///
@@ -211,67 +213,57 @@ fn start_in(
 /// # Errors
 ///
 /// As for [`start`].
-fn commands(
+fn kind_and_commands(
     tool_env: &ToolEnv,
     settings: &Settings,
     request: Request,
     places: &Places,
     log: &mut Vec<String>,
-) -> Result<(Kind, Vec<CommandSpec>), CantStart> {
-    let staging = || tool_env.tool_path(&settings.staging_folder);
-    let commands = match request {
-        Request::CheckTools => {
-            let wsl_check = tool_env.is_wsl().then(command::wsl_check_spec);
-            let specs = wsl_check.into_iter().chain(command::version_specs());
-            (Kind::CheckTools, specs.collect())
-        }
+) -> Result<(Box<dyn Kind>, Vec<CommandSpec>), CantStart> {
+    match request {
+        Request::CheckTools => return Ok(boxed(CheckTools::new(tool_env))),
         Request::Download { urls, quality } => {
             let config = streamrip_config_ready(tool_env, settings, places, log)?;
             let urls: Vec<&str> = urls.iter().map(String::as_str).collect();
-            let spec = command::download_spec(&config, &urls, quality);
-            (Kind::Download, vec![spec])
+            return Ok(boxed(Download::new(&config, &urls, quality)));
         }
         Request::Upload => {
-            let (ready, copy_key) = tool_env.ssh_ready(server(settings)?)?;
-            let upload = command::upload_spec(Path::new(&staging()?), &ready);
-            (Kind::Upload, copy_key.into_iter().chain([upload]).collect())
+            let server = server(settings)?;
+            let staging = settings.staging_folder.clone();
+            return Ok(boxed(Upload::new(tool_env, server, staging, read_staging)?));
         }
         Request::Compare => {
-            let (ready, copy_key) = tool_env.ssh_ready(server(settings)?)?;
-            let compare = command::compare_spec(Path::new(&staging()?), &ready);
-            (
-                Kind::Compare,
-                copy_key.into_iter().chain([compare]).collect(),
-            )
+            let server = server(settings)?;
+            let staging = settings.staging_folder.clone();
+            return Ok(boxed(Compare::new(
+                tool_env,
+                server,
+                staging,
+                read_staging,
+            )?));
         }
         Request::TestConnection => {
-            let (ready, copy_key) = tool_env.ssh_ready(server(settings)?)?;
-            let checks = command::test_connection_specs(&ready);
-            let specs = copy_key.into_iter().chain(checks).collect();
-            (Kind::TestConnection, specs)
+            let server = server(settings)?;
+            return Ok(boxed(TestConnection::new(tool_env, server)?));
         }
-    };
-    return Ok(commands);
+    }
 }
 
-/// Reads what's in the Staging folder, if a Run of `kind` ends with a
-/// Comparison.
-///
-/// # Returns
-///
-/// For an Upload or Compare with Server, the Staging folder `settings` name
-/// and what's in it now; `None` for any other Run.
+/// Returns `kind`, boxed for `Run::new`, with its `specs`.
+fn boxed<K: Kind + 'static>(
+    (kind, specs): (K, Vec<CommandSpec>),
+) -> (Box<dyn Kind>, Vec<CommandSpec>) {
+    return (Box::new(kind), specs);
+}
+
+/// Reads what's in `folder`, the Staging folder, for the Comparison an
+/// Upload or Compare with Server ends with.
 ///
 /// # Errors
 ///
 /// [`CantStart::Staging`] if the Staging folder can't be read.
-fn staging_at_start(kind: Kind, settings: &Settings) -> Result<Option<StagingAtStart>, CantStart> {
-    if !kind.ends_with_comparison() {
-        return Ok(None);
-    }
-    let folder = settings.staging_folder.clone();
-    let contents = StagingContents::read(&folder).map_err(CantStart::Staging)?;
-    return Ok(Some(StagingAtStart { folder, contents }));
+fn read_staging(folder: &Path) -> Result<StagingContents, CantStart> {
+    return StagingContents::read(folder).map_err(CantStart::Staging);
 }
 
 /// Renders the Streamrip config for a Download.

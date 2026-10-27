@@ -52,10 +52,8 @@ impl Tool {
 
 /// One command line: a tool, its arguments and extra environment variables.
 ///
-/// Two specs are equal when they run the same command. [`Run`] relies on
-/// this to recognize its probe steps, such as [`wsl_check_spec`].
-///
-/// [`Run`]: crate::run::Run
+/// Two specs are equal when they run the same command. Check tools relies
+/// on this to recognize its probe steps, such as [`wsl_check_spec`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
     /// The program to run.
@@ -114,9 +112,7 @@ pub const STREAMRIP_VERSION: &str = "2.2.0";
 
 /// Returns Check tools' commands: `rip --version`, then `rsync --version`.
 ///
-/// Inside WSL, [`Run`] runs [`wsl_check_spec`] before these.
-///
-/// [`Run`]: crate::run::Run
+/// Inside WSL, Check tools runs [`wsl_check_spec`] before these.
 pub fn version_specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(Tool::Rip, &["--version"]),

@@ -1,6 +1,6 @@
 # 15 – Each kind of Run in its own file
 
-Status: ready-for-agent
+Status: ready-for-human
 Blocked by: 14
 
 Part of `../spec.md`. Designed in `../../architecture/issues/04-per-kind-run-handlers.md` (see its Answer). Builds on fixes 12 (`start`) and 14 (`Outcome`, `process::Exit`). A refactor: no behavior or log text changes.
@@ -29,9 +29,19 @@ Part of `../spec.md`. Designed in `../../architecture/issues/04-per-kind-run-han
 
 ## Acceptance
 
-- [ ] Each kind file has unit tests fed with specs, lines and exit codes, no process: every hint `failure_message` gives today (WSL check, rip missing in WSL, SSH_FAILED, music folder); the pyenv probe queued and its `→` line; version ✓/⚠; Compare's itemized lines → `Outcome::Compared` with those files; Download's raw bytes → live rows and lines.
-- [ ] `Run` unit tests: the WSL-wide 127 hint and the spawn-failure hint.
-- [ ] Integration tests unchanged and passing; `dev/check.sh` passes.
-- [ ] One commit.
+- [x] Each kind file has unit tests fed with specs, lines and exit codes, no process: every hint `failure_message` gives today (WSL check, rip missing in WSL, SSH_FAILED, music folder); the pyenv probe queued and its `→` line; version ✓/⚠; Compare's itemized lines → `Outcome::Compared` with those files; Download's raw bytes → live rows and lines.
+- [x] `Run` unit tests: the WSL-wide 127 hint and the spawn-failure hint.
+- [x] Integration tests unchanged and passing; `dev/check.sh` passes.
+- [x] One commit.
 
 ## Comments
+
+2026-10-27, implementation:
+
+- One more hook than listed: `ends_quietly(spec) -> bool` (default `false`). `on_failure` always yields a problem, so no listed hook could keep the pyenv probe from being one. Like HEAD's first arm, a quiet end logs nothing at all, not even `Cancelled.`.
+- Test connection's music-folder hint covers every code but 255, and 127 only inside WSL. Natively, 127 still gets the music-folder hint, as before. "Every code but 255 and 127" above would have changed that.
+- The "streamrip isn't where Settings say inside WSL" hint was never only Check tools': a Download's `rip` exiting 127 inside WSL got it too. It is `check_tools::rip_missing_hint`, used by `download.rs`, without the probe.
+- To keep the order of `CantStart`s, `Upload::new` and `Compare::new` take the Staging folder and a `read` function from `start` (`read_staging`). They call it last, after `ssh_ready` and `tool_path`.
+- The WSL-wide hints are pure functions (`failure_line`, `spawn_failure_line`), so `Run`'s tests need no process or WSL.
+- The log file (through `tracing`) now also gets `✓ streamrip …` and `→ found streamrip at …`, since `Run` traces every `Note::Line`. The Log the app shows is unchanged.
+- `tests/ssh_target.rs`: all 8 pass against `dev/ssh-target.sh`, after removing the stale `[localhost]:2222` host key again with `ssh-keygen -R`.
