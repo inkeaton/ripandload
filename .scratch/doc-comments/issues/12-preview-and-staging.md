@@ -1,7 +1,7 @@
 # 12 – Apply the comment style: Link preview and Staging
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 11
 
 Part of `../map.md`. Slicing decided in `06-rollout-slicing.md`.
@@ -24,15 +24,23 @@ Comments only. Code changes are limited to pure moves of items into their sectio
 
 ## Acceptance
 
-- [ ] No clippy warnings in these files:
+- [x] No clippy warnings in these files:
   `cargo clippy --workspace --all-targets --message-format=short 2>&1 | grep -E '^(crates/ripandload-core/src/preview\.rs|crates/ripandload-core/src/staging\.rs):'` prints nothing.
-- [ ] No rustdoc warnings in these files:
+- [x] No rustdoc warnings in these files:
   `cargo doc --workspace --no-deps --document-private-items --message-format=short 2>&1 | grep -E '^(crates/ripandload-core/src/preview\.rs|crates/ripandload-core/src/staging\.rs):'` prints nothing.
-- [ ] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
-- [ ] `cargo fmt --all --check` and `cargo test --workspace` pass.
-- [ ] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
+- [x] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
+- [x] `cargo fmt --all --check` and `cargo test --workspace` pass.
+- [x] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
 
 ## Notes
 
 - Big files are documented as they are. If a file still reads badly with dividers, say so under Comments as a candidate for a later split; don't split it here.
 - Other files' warnings are out of scope. `dev/check.sh` stays red until ticket 14 is done.
+
+## Comments
+
+- Glossary gaps: "Compare with Server" (already noted in ticket 11) is used here too. "Single tracks" is defined only inside the Album folder entry; "disc folder" and "share link" (Deezer's redirecting links) are used without entries.
+- No split needed. `preview.rs` reads as Previews, Reading URLs, Describing answers, Fetching. `staging.rs` reads as Music files, Staging contents, Comparisons, Clearing, then the internal Grouping music and Helpers.
+- Private helpers used by one topic stay in that topic's section, as in the pilot: `host_and_path` under Reading URLs, `is_unsafe_to_clear` under Clearing.
+- `fetch`'s doc says "up to 10 seconds" in plain text: a pub doc can't link the private `TIMEOUT`, so the two must be kept in step by hand.
+- Code smell, not fixed here (comments only): `entries` returns `(PathBuf, bool)`, and its doc has to explain the `bool`.

@@ -1,5 +1,16 @@
-//! The Staging folder: how many files are waiting to be Uploaded, and
-//! clearing them out afterwards.
+//! The Staging folder: what is waiting in it to be Uploaded, and clearing
+//! it out afterwards.
+//!
+//! The Upload tab shows the Staging folder's music files grouped into Album
+//! folders and, once a Comparison exists, how many of them an Upload would
+//! still send. This module reads the folder for that, and deletes its
+//! contents on request.
+//!
+//! This module runs no tools. A Comparison is built from the files that
+//! Compare with Server's rsync dry run listed, which [`itemized_file`]
+//! reads out of its output.
+//!
+//! [`itemized_file`]: crate::command::itemized_file
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -9,6 +20,8 @@ use std::time::Instant;
 
 use crate::error::StagingError;
 
+// == Music files ==============================================================
+
 /// Extensions of the audio files streamrip writes, plus common ones from
 /// other tools, for people who keep their library in the Staging folder.
 const MUSIC_EXTENSIONS: &[&str] = &[
@@ -16,8 +29,10 @@ const MUSIC_EXTENSIONS: &[&str] = &[
     "dsf", "dff",
 ];
 
-/// Whether `path` is a music file, by its extension. Covers, lyrics and cue
-/// sheets aren't, though Uploads still send them.
+/// Returns whether `path` is a music file, by its extension in any case.
+///
+/// Covers, lyrics and cue sheets aren't music files, though Uploads still
+/// send them.
 pub fn is_music(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -28,25 +43,42 @@ pub fn is_music(path: &Path) -> bool {
         })
 }
 
-/// One album or playlist, or the "Single tracks" sitting directly in the
-/// Staging folder.
+// == Staging contents =========================================================
+
+/// The music files of one Album folder, or the single tracks.
+///
+/// The single tracks are the music files directly in the Staging folder,
+/// shown as "Single tracks".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusicGroup {
-    /// Relative to the Staging folder; `None` for the single tracks.
+    /// The Album folder, relative to the Staging folder; `None` for the
+    /// single tracks.
     pub folder: Option<PathBuf>,
-    /// Its music files, relative to the Staging folder, sorted.
+    /// Its music files, relative to the Staging folder, sorted. An Album
+    /// folder's include those in its disc folders.
     pub files: Vec<PathBuf>,
 }
 
-/// What's in the Staging folder: its music, grouped, and how many files in all.
+/// What's in the Staging folder: its music, grouped, and how many files in
+/// all.
 #[derive(Debug, Clone)]
 pub struct StagingContents {
+    /// The music files by Album folder, as [`music_groups`] returns them.
     pub groups: Vec<MusicGroup>,
-    /// Every file, music or not.
+    /// How many files there are in all, music or not.
     files: usize,
 }
 
 impl StagingContents {
+    /// Reads `folder`, the Staging folder, as it is now.
+    ///
+    /// The music and the file count come from two walks of the folder, so
+    /// files that change in between can make them disagree.
+    ///
+    /// # Errors
+    ///
+    /// The error from [`music_groups`] or [`count_files`] if a folder
+    /// couldn't be listed.
     pub fn read(folder: &Path) -> Result<Self, StagingError> {
         Ok(Self {
             groups: music_groups(folder)?,
@@ -54,7 +86,8 @@ impl StagingContents {
         })
     }
 
-    /// Relative to the Staging folder.
+    /// Returns every music file, relative to the Staging folder, group by
+    /// group.
     pub fn music_files(&self) -> impl Iterator<Item = &Path> {
         self.groups
             .iter()
@@ -62,15 +95,18 @@ impl StagingContents {
             .map(PathBuf::as_path)
     }
 
+    /// Returns how many music files there are.
     pub fn music_count(&self) -> usize {
         self.groups.iter().map(|group| group.files.len()).sum()
     }
 
+    /// Returns whether the Staging folder holds no files at all.
     pub fn is_empty(&self) -> bool {
         self.files == 0
     }
 
-    /// Covers and anything else that isn't music.
+    /// Returns how many files aren't music files: covers, lyrics and the
+    /// like.
     pub fn other_count(&self) -> usize {
         // The two counts come from two walks; files deleted in between could
         // make the music outnumber them.
@@ -78,52 +114,21 @@ impl StagingContents {
     }
 }
 
-/// Which music in the Staging folder is on the Server, as a Compare with
-/// Server found it, or as a successful Upload left it.
-#[derive(Debug, Clone)]
-pub struct Comparison {
-    folder: PathBuf,
-    /// The music files in the Staging folder at the time. A file that came
-    /// later, from a Download or by hand, isn't known to be on the Server.
-    music_then: BTreeSet<PathBuf>,
-    /// What an Upload would have sent then.
-    to_send: BTreeSet<PathBuf>,
-    pub at: Instant,
-}
-
-impl Comparison {
-    /// `to_send` is what rsync listed, relative to `folder`; empty after an
-    /// Upload that worked.
-    pub fn new(folder: &Path, contents: &StagingContents, to_send: &[PathBuf]) -> Self {
-        Self {
-            folder: folder.to_owned(),
-            music_then: contents.music_files().map(Path::to_path_buf).collect(),
-            to_send: to_send.iter().cloned().collect(),
-            at: Instant::now(),
-        }
-    }
-
-    /// A comparison of another Staging folder says nothing about this one.
-    pub fn is_for(&self, folder: &Path) -> bool {
-        self.folder == folder
-    }
-
-    pub fn is_uploaded(&self, file: &Path) -> bool {
-        self.music_then.contains(file) && !self.to_send.contains(file)
-    }
-
-    /// How many of `files` an Upload would still send.
-    pub fn to_upload<'a>(&self, files: impl IntoIterator<Item = &'a Path>) -> usize {
-        files
-            .into_iter()
-            .filter(|file| !self.is_uploaded(file))
-            .count()
-    }
-}
-
-/// The music files in `folder`, grouped by the folder they sit in. That's
-/// the album or playlist whatever the folder Naming template or streamrip's
-/// options make of the layout. Sorted by folder, single tracks last.
+/// Returns the music files in `folder`, grouped by Album folder.
+///
+/// A music file's Album folder is the folder it sits in, or the one above
+/// if that's a disc folder. That holds whatever the folder Naming template
+/// or streamrip's options make of the layout.
+///
+/// # Returns
+///
+/// One [`MusicGroup`] per Album folder, sorted by folder, then the single
+/// tracks, if any. Nothing for a missing or musicless `folder`.
+///
+/// # Errors
+///
+/// [`StagingError::Read`] if `folder` or a folder below it couldn't be
+/// listed.
 pub fn music_groups(folder: &Path) -> Result<Vec<MusicGroup>, StagingError> {
     let mut files = Vec::new();
     collect_music(folder, folder, &mut files)?;
@@ -151,49 +156,18 @@ pub fn music_groups(folder: &Path) -> Result<Vec<MusicGroup>, StagingError> {
     Ok(groups)
 }
 
-/// The folder `file` sits in, or the one above if that's a disc folder
-/// inside an album. A disc folder directly in the Staging folder is a group
-/// of its own, not single tracks.
-fn album_folder(file: &Path) -> PathBuf {
-    let parent = file.parent().unwrap_or(Path::new(""));
-    let album = parent
-        .parent()
-        .filter(|album| !album.as_os_str().is_empty());
-    match (parent.file_name().and_then(|name| name.to_str()), album) {
-        (Some(name), Some(album)) if is_disc_folder(name) => album,
-        _ => parent,
-    }
-    .to_path_buf()
-}
-
-/// `Disc 1` as streamrip names them, and `CD 2`, `disc2` from other tools.
-fn is_disc_folder(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    let Some(number) = name
-        .strip_prefix("disc")
-        .or_else(|| name.strip_prefix("cd"))
-    else {
-        return false;
-    };
-    let number = number.trim_start();
-    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-/// Adds the music files below `folder` to `files`, relative to `root`.
-fn collect_music(root: &Path, folder: &Path, files: &mut Vec<PathBuf>) -> Result<(), StagingError> {
-    for (path, is_dir) in entries(folder)? {
-        if is_dir {
-            collect_music(root, &path, files)?;
-        } else if is_music(&path) {
-            let relative = path.strip_prefix(root).unwrap_or(&path);
-            files.push(relative.to_path_buf());
-        }
-    }
-    Ok(())
-}
-
-/// Counts the files in `folder` and every folder below it. Folders themselves
-/// don't count, and symlinks are counted, not followed. A missing folder has 0.
+/// Counts the files in `folder` and every folder below it.
+///
+/// Folders themselves don't count, and symlinks are counted, not followed.
+///
+/// # Returns
+///
+/// The number of files, 0 for a missing or empty `folder`.
+///
+/// # Errors
+///
+/// [`StagingError::Read`] if `folder` or a folder below it couldn't be
+/// listed.
 pub fn count_files(folder: &Path) -> Result<usize, StagingError> {
     let mut count = 0;
     for (path, is_dir) in entries(folder)? {
@@ -202,9 +176,90 @@ pub fn count_files(folder: &Path) -> Result<usize, StagingError> {
     Ok(count)
 }
 
-/// Deletes everything inside `folder`, but never `folder` itself.
-/// Returns how many files went. Refuses a filesystem root or the home folder,
-/// in case the Staging folder was set to one by mistake.
+// == Comparisons ==============================================================
+
+/// Which music files in the Staging folder are on the Server.
+///
+/// It is what a Compare with Server found, or what a successful Upload left:
+/// one where the Server has everything.
+#[derive(Debug, Clone)]
+pub struct Comparison {
+    /// The Staging folder compared.
+    folder: PathBuf,
+    /// The music files in the Staging folder at the time. A file that came
+    /// later, from a Download or by hand, isn't known to be on the Server.
+    music_then: BTreeSet<PathBuf>,
+    /// What an Upload would have sent then, relative to `folder`.
+    to_send: BTreeSet<PathBuf>,
+    /// When the Comparison was made.
+    pub at: Instant,
+}
+
+impl Comparison {
+    /// A Comparison of the Staging folder as `contents` found it, made now.
+    ///
+    /// # Arguments
+    ///
+    /// - `folder`: the Staging folder compared.
+    /// - `contents`: what was in `folder` at the time.
+    /// - `to_send`: the files Compare with Server's rsync listed, relative to
+    ///   `folder`; empty after an Upload that worked.
+    pub fn new(folder: &Path, contents: &StagingContents, to_send: &[PathBuf]) -> Self {
+        Self {
+            folder: folder.to_owned(),
+            music_then: contents.music_files().map(Path::to_path_buf).collect(),
+            to_send: to_send.iter().cloned().collect(),
+            at: Instant::now(),
+        }
+    }
+
+    /// Returns whether the Comparison was made of `folder`.
+    ///
+    /// A Comparison of another Staging folder says nothing about this one.
+    pub fn is_for(&self, folder: &Path) -> bool {
+        self.folder == folder
+    }
+
+    /// Returns whether `file` is known to be on the Server.
+    ///
+    /// It is when it was in the Staging folder at the time and rsync didn't
+    /// list it. A file that came later isn't, even if the Server has it.
+    pub fn is_uploaded(&self, file: &Path) -> bool {
+        self.music_then.contains(file) && !self.to_send.contains(file)
+    }
+
+    /// Returns how many of `files` an Upload would still send.
+    ///
+    /// That's every file not known to be on the Server (see
+    /// [`Comparison::is_uploaded`]).
+    pub fn to_upload<'a>(&self, files: impl IntoIterator<Item = &'a Path>) -> usize {
+        files
+            .into_iter()
+            .filter(|file| !self.is_uploaded(file))
+            .count()
+    }
+}
+
+// == Clearing =================================================================
+
+/// Deletes everything inside `folder`, the Staging folder, but not `folder`
+/// itself.
+///
+/// A symlink is deleted, never what it points to.
+///
+/// # Returns
+///
+/// How many files were deleted, counted as [`count_files`] does. 0 for a
+/// missing `folder`, which is left missing.
+///
+/// # Errors
+///
+/// - [`StagingError::Refused`] if `folder` is a filesystem root, an empty
+///   path or the home folder, which the Staging folder was most likely set
+///   to by mistake.
+/// - [`StagingError::Read`] if a folder couldn't be listed.
+/// - [`StagingError::Remove`] if a file or folder couldn't be deleted.
+///   What was deleted before it stays deleted.
 pub fn clear(folder: &Path) -> Result<usize, StagingError> {
     if is_unsafe_to_clear(folder) {
         return Err(StagingError::Refused {
@@ -223,15 +278,93 @@ pub fn clear(folder: &Path) -> Result<usize, StagingError> {
     Ok(count)
 }
 
-/// The filesystem root, an empty path or the home folder.
+/// Returns whether `folder` is a filesystem root, an empty path or the home
+/// folder.
+///
+/// `folder` is compared with symlinks resolved, when it exists.
 fn is_unsafe_to_clear(folder: &Path) -> bool {
     let folder = folder.canonicalize().unwrap_or_else(|_| folder.to_owned());
     let home = directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned());
     folder.parent().is_none() || home.is_some_and(|home| folder == home)
 }
 
-/// `(path, is_dir)` for each entry in `folder`, or nothing if it doesn't exist.
+// == Grouping music ===========================================================
+
+/// Adds the music files in `folder` and below to `files`.
+///
+/// # Arguments
+///
+/// - `root`: the Staging folder, which the added paths are relative to.
+/// - `folder`: the folder to walk, `root` or a folder below it.
+/// - `files`: where the music files are added, in no particular order.
+///
+/// # Errors
+///
+/// [`StagingError::Read`] if `folder` or a folder below it couldn't be
+/// listed.
+fn collect_music(root: &Path, folder: &Path, files: &mut Vec<PathBuf>) -> Result<(), StagingError> {
+    for (path, is_dir) in entries(folder)? {
+        if is_dir {
+            collect_music(root, &path, files)?;
+        } else if is_music(&path) {
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            files.push(relative.to_path_buf());
+        }
+    }
+    Ok(())
+}
+
+/// Returns the Album folder of `file`, a path relative to the Staging folder.
+///
+/// That's the folder `file` sits in, or the one above if that's a disc
+/// folder. A disc folder directly in the Staging folder is an Album folder
+/// of its own, not single tracks.
+///
+/// # Returns
+///
+/// The Album folder, relative to the Staging folder, or the empty path when
+/// `file` is one of the single tracks.
+fn album_folder(file: &Path) -> PathBuf {
+    let parent = file.parent().unwrap_or(Path::new(""));
+    let album = parent
+        .parent()
+        .filter(|album| !album.as_os_str().is_empty());
+    match (parent.file_name().and_then(|name| name.to_str()), album) {
+        (Some(name), Some(album)) if is_disc_folder(name) => album,
+        _ => parent,
+    }
+    .to_path_buf()
+}
+
+/// Returns whether `name` is a disc folder's name, in any case.
+///
+/// That's `Disc 1` as streamrip names them, and `CD 2` or `disc2` from
+/// other tools.
+fn is_disc_folder(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let Some(number) = name
+        .strip_prefix("disc")
+        .or_else(|| name.strip_prefix("cd"))
+    else {
+        return false;
+    };
+    let number = number.trim_start();
+    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+// == Helpers ==================================================================
+
+/// Lists the entries in `folder`, in the order the OS gives them.
+///
+/// # Returns
+///
+/// `(path, is_dir)` for each entry, or nothing if `folder` doesn't exist.
 /// `is_dir` is false for a symlink, even one to a folder.
+///
+/// # Errors
+///
+/// [`StagingError::Read`] if `folder` exists but couldn't be listed, or an
+/// entry's type couldn't be read.
 fn entries(folder: &Path) -> Result<Vec<(PathBuf, bool)>, StagingError> {
     let read_err = |path: &Path| {
         let path = path.to_owned();
@@ -252,12 +385,22 @@ fn entries(folder: &Path) -> Result<Vec<(PathBuf, bool)>, StagingError> {
         .collect()
 }
 
+// == Tests ====================================================================
+
 #[cfg(test)]
+#[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 mod tests {
     use super::*;
 
-    /// `album/01.flac`, `album/02.flac`, `album/cover/front.jpg`, `loose.mp3`
-    /// and an empty folder.
+    // == Fixtures =============================================================
+
+    /// Returns a temporary Staging folder with `album/01.flac`,
+    /// `album/02.flac`, `album/cover/front.jpg`, `loose.mp3` and an empty
+    /// folder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the folder or its files can't be created.
     fn staging() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -274,6 +417,18 @@ mod tests {
         dir
     }
 
+    /// Returns the [`MusicGroup`] of `files` in `folder`, `None` for the
+    /// single tracks.
+    fn group(folder: Option<&str>, files: &[&str]) -> MusicGroup {
+        MusicGroup {
+            folder: folder.map(PathBuf::from),
+            files: files.iter().map(PathBuf::from).collect(),
+        }
+    }
+
+    // == Music files ==========================================================
+
+    /// Music files are told apart by their extension, in any case.
     #[test]
     fn music_is_told_apart_by_extension_in_any_case() {
         for music in ["01.flac", "a/b/02. Song.MP3", "x.m4a", "x.Opus", "x.dsf"] {
@@ -291,13 +446,9 @@ mod tests {
         }
     }
 
-    fn group(folder: Option<&str>, files: &[&str]) -> MusicGroup {
-        MusicGroup {
-            folder: folder.map(PathBuf::from),
-            files: files.iter().map(PathBuf::from).collect(),
-        }
-    }
+    // == Staging contents =====================================================
 
+    /// Music is grouped by Album folder, with the single tracks last.
     #[test]
     fn music_is_grouped_by_album_folder_with_loose_files_last() {
         let dir = staging();
@@ -310,6 +461,7 @@ mod tests {
         );
     }
 
+    /// Disc folders belong to the Album folder above them, however deep.
     #[test]
     fn disc_folders_belong_to_their_album_however_deep_it_is() {
         let dir = tempfile::tempdir().unwrap();
@@ -347,6 +499,7 @@ mod tests {
         );
     }
 
+    /// A disc folder directly in the Staging folder is its own group.
     #[test]
     fn a_disc_folder_with_no_album_above_it_is_its_own_group() {
         let dir = tempfile::tempdir().unwrap();
@@ -359,6 +512,35 @@ mod tests {
         );
     }
 
+    /// Files in subfolders are counted; folders aren't.
+    #[test]
+    fn count_includes_files_in_subfolders() {
+        let dir = staging();
+        assert_eq!(count_files(dir.path()).unwrap(), 4);
+    }
+
+    /// A missing folder has no files.
+    #[test]
+    fn missing_folder_has_no_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(count_files(&dir.path().join("not-yet")).unwrap(), 0);
+    }
+
+    /// A symlink counts as one file and isn't followed.
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_counted_not_followed() {
+        let dir = staging();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("a"), "x").unwrap();
+        fs::write(outside.path().join("b"), "x").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
+        assert_eq!(count_files(dir.path()).unwrap(), 5);
+    }
+
+    // == Comparisons ==========================================================
+
+    /// A Comparison counts what rsync would send and what came since.
     #[test]
     fn a_comparison_counts_what_rsync_would_send_and_what_came_since() {
         let dir = staging();
@@ -376,29 +558,9 @@ mod tests {
         assert!(!comparison.is_for(Path::new("/elsewhere")));
     }
 
-    #[test]
-    fn count_includes_files_in_subfolders() {
-        let dir = staging();
-        assert_eq!(count_files(dir.path()).unwrap(), 4);
-    }
+    // == Clearing =============================================================
 
-    #[test]
-    fn missing_folder_has_no_files() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(count_files(&dir.path().join("not-yet")).unwrap(), 0);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlinks_are_counted_not_followed() {
-        let dir = staging();
-        let outside = tempfile::tempdir().unwrap();
-        fs::write(outside.path().join("a"), "x").unwrap();
-        fs::write(outside.path().join("b"), "x").unwrap();
-        std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
-        assert_eq!(count_files(dir.path()).unwrap(), 5);
-    }
-
+    /// Clearing empties the folder but keeps it.
     #[test]
     fn clear_empties_the_folder_but_keeps_it() {
         let dir = staging();
@@ -407,6 +569,7 @@ mod tests {
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
+    /// Clearing a missing folder does nothing and doesn't create it.
     #[test]
     fn clearing_a_missing_folder_does_nothing() {
         let dir = tempfile::tempdir().unwrap();
@@ -415,6 +578,7 @@ mod tests {
         assert!(!missing.exists());
     }
 
+    /// Clearing removes a symlink but not what it points to.
     #[cfg(unix)]
     #[test]
     fn clear_removes_a_symlink_but_not_what_it_points_to() {
@@ -428,6 +592,7 @@ mod tests {
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
+    /// Clearing refuses a filesystem root, an empty path and home.
     #[test]
     fn clear_refuses_the_root_and_the_home_folder() {
         for folder in [Path::new("/"), Path::new("")] {
