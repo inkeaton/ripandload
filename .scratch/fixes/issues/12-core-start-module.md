@@ -1,6 +1,6 @@
 # 12 – Core `start`: one way to start a Run
 
-Status: ready-for-agent
+Status: done
 Blocked by: 11
 
 Part of `../spec.md`. Designed in `../../architecture/issues/02-run-start-up.md` (see its Answer). Names follow fix 11 (`Run`, `Process`).
@@ -20,8 +20,16 @@ Part of `../spec.md`. Designed in `../../architecture/issues/02-run-start-up.md`
 
 ## Acceptance
 
-- [ ] Every `CantStart` variant has a test; Download start-up is tested without egui or the real config folder.
-- [ ] Runs that exist have always spawned a process (or failed to spawn one).
-- [ ] `dev/check.sh` passes; the `#[ignore]`d SSH-target tests pass against `dev/ssh-target.sh` if available, else say so under Comments.
+- [x] Every `CantStart` variant has a test; Download start-up is tested without egui or the real config folder.
+- [x] Runs that exist have always spawned a process (or failed to spawn one).
+- [x] `dev/check.sh` passes; the `#[ignore]`d SSH-target tests pass against `dev/ssh-target.sh` if available, else say so under Comments.
 
 ## Comments
+
+2026-10-27, implementation:
+
+- `CantStart`'s messages keep `server_missing`'s wording without the trailing full stop ("Set the Server's host first"): `error_chain` drops a trailing full stop anyway, so the Log and Status bar read the same either way.
+- The `CantStart` tests are unit tests in `start.rs`, through a private `start_in` that takes the `ToolEnv`: `CantStart::Tool` needs the tools inside WSL, which `ToolEnv::from_settings` never gives on Linux.
+- `Places`' fields are `pub`, so tests point them at a temporary folder; `Places::standard()` is the app's constructor.
+- `start` keeps the "Created the Streamrip config at … from …" line in the Log. The old `app.rs` code cleared the Log again right after writing it.
+- SSH-target tests: run against `dev/ssh-target.sh`. 2 passed, and 5 failed before reaching the Server with "Host key for [localhost]:2222 has changed", from a stale `~/.ssh/known_hosts` entry left by an earlier container. Clear it with `ssh-keygen -R '[localhost]:2222'` and rerun.

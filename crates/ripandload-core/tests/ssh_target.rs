@@ -1,4 +1,5 @@
-//! Checks Upload, Compare with Server and Test connection on a real Server.
+//! Checks Upload, Compare with Server and Test connection on a real Server,
+//! each started by [`start`].
 //!
 //! The Server is the Docker container `dev/ssh-target.sh` starts: OpenSSH
 //! and rsync on `localhost:2222`, with its music folder mounted from
@@ -20,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ripandload_core::run::Run;
-use ripandload_core::settings::Server;
-use ripandload_core::tool_env::ToolEnv;
+use ripandload_core::settings::{Server, Settings};
+use ripandload_core::start::{Places, Request, start};
 
 // == Fixtures =================================================================
 
@@ -44,9 +45,39 @@ fn server() -> Server {
     }
 }
 
-/// Returns tools that run natively, with `rip` looked up on `PATH`.
-fn native() -> ToolEnv {
-    ToolEnv::Native { rip: None }
+/// Returns Settings with `server` as the only Server, and `staging` as the
+/// Staging folder.
+///
+/// The tools run natively, looked up on `PATH`.
+fn settings(server: Server, staging: &Path) -> Settings {
+    Settings {
+        staging_folder: staging.to_owned(),
+        servers: vec![server],
+        active_server: 0,
+        ..Settings::default()
+    }
+}
+
+/// Starts `request` with `settings`, then runs it to the end.
+///
+/// No Run here needs the Streamrip config, so there are no [`Places`].
+///
+/// # Returns
+///
+/// The finished Run and its whole log.
+///
+/// # Panics
+///
+/// Panics if the Run can't start, or takes longer than [`TIMEOUT`].
+fn started(settings: &Settings, request: Request) -> (Run, Vec<String>) {
+    let places = Places {
+        streamrip_config: None,
+        personal: None,
+    };
+    let mut log = Vec::new();
+    let run = start(settings, request, &places, &mut log)
+        .unwrap_or_else(|cant| panic!("the Run didn't start: {cant}"));
+    run_to_end(run, log)
 }
 
 /// Polls `run` the way the GUI does, until it's finished.
@@ -82,11 +113,13 @@ fn run_to_end(mut run: Run, mut log: Vec<String>) -> (Run, Vec<String>) {
 ///
 /// # Panics
 ///
-/// Panics if the run takes longer than [`TIMEOUT`].
+/// Panics if the run can't start, or takes longer than [`TIMEOUT`].
 fn test_connection(server: &Server) -> (Run, Vec<String>) {
-    let mut log = Vec::new();
-    let run = Run::test_connection(native(), server, &mut log);
-    run_to_end(run, log)
+    let staging = tempfile::tempdir().unwrap();
+    started(
+        &settings(server.clone(), staging.path()),
+        Request::TestConnection,
+    )
 }
 
 /// Uploads `staging` to the container's Server, to the end.
@@ -97,11 +130,9 @@ fn test_connection(server: &Server) -> (Run, Vec<String>) {
 ///
 /// # Panics
 ///
-/// Panics if the run takes longer than [`TIMEOUT`].
+/// Panics if the run can't start, or takes longer than [`TIMEOUT`].
 fn upload(staging: &Path) -> (Run, Vec<String>) {
-    let mut log = Vec::new();
-    let run = Run::upload(native(), staging, &server(), &mut log);
-    run_to_end(run, log)
+    started(&settings(server(), staging), Request::Upload)
 }
 
 /// Empties the tests' music folder on the Server.
@@ -248,9 +279,7 @@ fn compare_lists_only_what_the_server_lacks_and_sends_nothing() {
 
     write("Björk - Debut (1993)/Disc 1/01. Human Behaviour.flac");
     write("Björk - Debut (1993)/cover.jpg");
-    let mut log = Vec::new();
-    let run = Run::compare(native(), staging.path(), &server(), &mut log);
-    let (run, log) = run_to_end(run, log);
+    let (run, log) = started(&settings(server(), staging.path()), Request::Compare);
 
     assert!(run.succeeded(), "{log:#?}");
     assert_eq!(run.status(), "Compare with Server finished");
@@ -274,9 +303,7 @@ fn a_failed_upload_says_nothing_about_the_server() {
     let mut server = server();
     server.port = 2223;
 
-    let mut log = Vec::new();
-    let run = Run::upload(native(), staging.path(), &server, &mut log);
-    let (run, log) = run_to_end(run, log);
+    let (run, log) = started(&settings(server, staging.path()), Request::Upload);
 
     assert!(!run.succeeded(), "{log:#?}");
     assert_eq!(run.to_send(), None);

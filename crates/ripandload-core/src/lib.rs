@@ -14,7 +14,7 @@
 //!
 //! - Settings: [`settings`], [`streamrip_config`] and [`source`].
 //! - Running tools: [`command`], [`tool_env`], [`wsl_path`], [`process`] and
-//!   [`run`].
+//!   [`run`], with [`start`] to start a Run from Settings.
 //! - Reading their output: [`live_output`] and [`wsl_output`].
 //! - Music: [`staging`] for the Staging folder, and [`preview`].
 //! - Problems: [`error`] and [`log_file`].
@@ -29,6 +29,7 @@ pub mod run;
 pub mod settings;
 pub mod source;
 pub mod staging;
+pub mod start;
 pub mod streamrip_config;
 pub mod tool_env;
 pub mod wsl_output;

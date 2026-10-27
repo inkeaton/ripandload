@@ -217,6 +217,63 @@ pub enum StreamripConfigError {
     },
 }
 
+// == Starting a Run ===========================================================
+
+/// Why a Run couldn't start: something went wrong before its first process.
+///
+/// Returned by [`start::start`] and, for the Server's part,
+/// [`start::server`]. A process that fails to spawn isn't one of these: the
+/// Run then exists and logs it.
+///
+/// [`start::start`]: crate::start::start
+/// [`start::server`]: crate::start::server
+#[derive(Debug, thiserror::Error)]
+pub enum CantStart {
+    /// The Run needs a Server, and Settings have no active one.
+    #[error("No Server configured")]
+    NoServer,
+
+    /// The active Server's host or music folder is empty.
+    #[error("Set the Server's {} first", server_incomplete(*.host, *.music_folder))]
+    ServerIncomplete {
+        /// Whether the host is empty.
+        host: bool,
+        /// Whether the music folder is empty.
+        music_folder: bool,
+    },
+
+    /// A Download needs the Streamrip config, and the system has no config
+    /// folder to put it in.
+    #[error("No config folder found; the Streamrip config can't be written")]
+    NoConfigFolder,
+
+    /// The Streamrip config couldn't be rendered before a Download.
+    #[error("couldn't get the Streamrip config ready")]
+    StreamripConfig(
+        /// Why rendering failed.
+        #[from]
+        StreamripConfigError,
+    ),
+
+    /// A path the tools need couldn't be converted for them.
+    #[error("couldn't get the tools ready")]
+    Tool(
+        /// Why the path couldn't be converted.
+        #[from]
+        ToolError,
+    ),
+}
+
+/// Returns what [`CantStart::ServerIncomplete`] asks the user to set: the
+/// `host`, the `music_folder`, or both, whichever is empty.
+fn server_incomplete(host: bool, music_folder: bool) -> &'static str {
+    match (host, music_folder) {
+        (true, true) => "host and music folder",
+        (true, false) => "host",
+        _ => "music folder",
+    }
+}
+
 // == Staging folder ===========================================================
 
 /// Why the Staging folder couldn't be read, counted or cleared.

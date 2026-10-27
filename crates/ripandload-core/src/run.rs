@@ -43,15 +43,59 @@ const SSH_FAILED: i32 = 255;
 /// The shell's exit code when the program doesn't exist (inside WSL).
 const SHELL_NOT_FOUND: i32 = 127;
 
+// == Kinds of run =============================================================
+
+/// Which run a [`Run`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Check tools.
+    CheckTools,
+    /// A Download.
+    Download,
+    /// An Upload.
+    Upload,
+    /// Compare with Server.
+    Compare,
+    /// Test connection.
+    TestConnection,
+}
+
+impl Kind {
+    /// Returns the run's name, as the status bar shows it.
+    fn name(self) -> &'static str {
+        match self {
+            Kind::CheckTools => "Check tools",
+            Kind::Download => "Download",
+            Kind::Upload => "Upload",
+            Kind::Compare => "Compare with Server",
+            Kind::TestConnection => "Test connection",
+        }
+    }
+
+    /// Returns whether the run ends at its first problem.
+    ///
+    /// Check tools carries on, so one missing tool doesn't hide the others;
+    /// every other run stops.
+    fn stops_at_first_problem(self) -> bool {
+        self != Kind::CheckTools
+    }
+
+    /// Returns whether success reads "finished" rather than "all good".
+    fn says_finished(self) -> bool {
+        matches!(self, Kind::Download | Kind::Upload | Kind::Compare)
+    }
+}
+
 // == Runs =====================================================================
 
 /// One run of Check tools, a Download, an Upload, Compare with Server or
 /// Test connection.
 ///
-/// It's started by the constructor for its kind, then driven by
-/// [`Run::poll`] until [`Run::is_finished`]. A run whose first command
-/// can't start is already finished when the constructor returns, with the
-/// problem in the log.
+/// It's started by [`start::start`], then driven by [`Run::poll`] until
+/// [`Run::is_finished`]. A run whose first command can't spawn is already
+/// finished when it's returned, with the problem in the log.
+///
+/// [`start::start`]: crate::start::start
 pub struct Run {
     /// Which run this is, which decides its status bar text and its messages.
     kind: Kind,
@@ -188,25 +232,30 @@ impl Run {
 
     /// Starts a run of `kind` with the first of `specs` that can start.
     ///
+    /// [`start::start`] calls this once it has built the commands. A run
+    /// whose commands all fail to spawn is already finished when this
+    /// returns, with the problems in the log.
+    ///
     /// # Arguments
     ///
     /// - `kind`: which run this is.
     /// - `tool_env`: where the tools run.
-    /// - `specs`: the commands to run, in order, or the error that kept them
-    ///   from being built. The error is logged as a problem, and the run is
-    ///   over at once.
-    /// - `log`: the log, which gets the first command line, or the problems
-    ///   that kept anything from starting.
-    fn start(
+    /// - `specs`: the commands to run, in order. Empty starts nothing, and
+    ///   the run is over at once.
+    /// - `log`: the log, which gets the first command line, or why the
+    ///   commands couldn't start.
+    ///
+    /// [`start::start`]: crate::start::start
+    pub fn new(
         kind: Kind,
         tool_env: ToolEnv,
-        specs: Result<Vec<CommandSpec>, ToolError>,
+        specs: Vec<CommandSpec>,
         log: &mut Vec<String>,
     ) -> Self {
         let mut run = Self {
             kind,
             tool_env,
-            queue: VecDeque::new(),
+            queue: specs.into(),
             current: None,
             rip_version: None,
             to_send: Vec::new(),
@@ -214,12 +263,41 @@ impl Run {
             problems: 0,
             cancelled: false,
         };
-        match specs {
-            Ok(specs) => run.queue = specs.into(),
-            Err(err) => run.problem(log, format!("✗ {}", error_chain(&err))),
-        }
         run.start_next(log);
         run
+    }
+
+    /// Starts a run of `kind`, or logs why its commands couldn't be built.
+    ///
+    /// Kept for the constructors above, which fix 13
+    /// (`.scratch/fixes/issues/13-app-uses-start.md`) removes once the app
+    /// starts every run through [`start::start`].
+    ///
+    /// # Arguments
+    ///
+    /// - `kind`: which run this is.
+    /// - `tool_env`: where the tools run.
+    /// - `specs`: the commands to run, in order, or the error that kept them
+    ///   from being built. The error is logged as a problem, and the run is
+    ///   over at once.
+    /// - `log`: the log, which gets the first command line, or the problem
+    ///   that kept anything from starting.
+    ///
+    /// [`start::start`]: crate::start::start
+    fn start(
+        kind: Kind,
+        tool_env: ToolEnv,
+        specs: Result<Vec<CommandSpec>, ToolError>,
+        log: &mut Vec<String>,
+    ) -> Self {
+        match specs {
+            Ok(specs) => Self::new(kind, tool_env, specs, log),
+            Err(err) => {
+                let mut run = Self::new(kind, tool_env, Vec::new(), log);
+                run.problem(log, format!("✗ {}", error_chain(&err)));
+                run
+            }
+        }
     }
 
     // == Polling and Cancel ===================================================
@@ -571,47 +649,6 @@ impl Run {
 }
 
 // == Internal types ===========================================================
-
-/// Which run a [`Run`] is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    /// Check tools.
-    CheckTools,
-    /// A Download.
-    Download,
-    /// An Upload.
-    Upload,
-    /// Compare with Server.
-    Compare,
-    /// Test connection.
-    TestConnection,
-}
-
-impl Kind {
-    /// Returns the run's name, as the status bar shows it.
-    fn name(self) -> &'static str {
-        match self {
-            Kind::CheckTools => "Check tools",
-            Kind::Download => "Download",
-            Kind::Upload => "Upload",
-            Kind::Compare => "Compare with Server",
-            Kind::TestConnection => "Test connection",
-        }
-    }
-
-    /// Returns whether the run ends at its first problem.
-    ///
-    /// Check tools carries on, so one missing tool doesn't hide the others;
-    /// every other run stops.
-    fn stops_at_first_problem(self) -> bool {
-        self != Kind::CheckTools
-    }
-
-    /// Returns whether success reads "finished" rather than "all good".
-    fn says_finished(self) -> bool {
-        matches!(self, Kind::Download | Kind::Upload | Kind::Compare)
-    }
-}
 
 /// rip's stdout and stderr, each replayed on its own [`LiveOutput`].
 ///

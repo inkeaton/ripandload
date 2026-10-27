@@ -1,21 +1,24 @@
-//! Checks Check tools and Downloads run as a [`Run`].
+//! Checks Check tools and Downloads, started by [`start`] and run as a
+//! [`Run`].
 //!
-//! `rip` is played by small `sh` scripts, through [`script_rip`], so only on
-//! Unix. Check tools' `rsync --version` runs the real rsync, if there is one;
-//! the tests only look at its command line.
+//! `rip` is played by small `sh` scripts, through
+//! [`settings_with_script_rip`], so only on Unix. Check tools'
+//! `rsync --version` runs the real rsync, if there is one; the tests only
+//! look at its command line. A Download's Streamrip config goes in the
+//! test's temporary folder, seeded from the personal streamrip config
+//! fixture.
 #![cfg(unix)]
 #![allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use ripandload_core::command::CommandSpec;
-use ripandload_core::command::Tool;
 use ripandload_core::run::Run;
-use ripandload_core::tool_env::ToolEnv;
+use ripandload_core::settings::Settings;
+use ripandload_core::start::{Request, start};
 
 mod common;
-use common::script_rip;
+use common::{places_in, settings_with_script_rip};
 
 // == Fixtures =================================================================
 
@@ -37,12 +40,22 @@ fn run_to_end(run: &mut Run, log: &mut Vec<String>) {
     }
 }
 
-/// Returns a spec that runs `rip` with `args` and no extra environment.
-fn rip_spec(args: &[&str]) -> CommandSpec {
-    CommandSpec {
-        program: Tool::Rip,
-        args: args.iter().map(ToString::to_string).collect(),
-        env: Vec::new(),
+/// Starts `request` with `settings` and [`places_in`] `dir`, logging into
+/// `log`.
+///
+/// # Panics
+///
+/// Panics if the Run can't start, showing why.
+fn started(settings: &Settings, request: Request, dir: &Path, log: &mut Vec<String>) -> Run {
+    start(settings, request, &places_in(dir), log)
+        .unwrap_or_else(|cant| panic!("the Run didn't start: {cant}; log: {log:#?}"))
+}
+
+/// Returns a Download of `urls` at the Quality in Settings.
+fn download(urls: &[&str]) -> Request {
+    Request::Download {
+        urls: urls.iter().map(ToString::to_string).collect(),
+        quality: None,
     }
 }
 
@@ -57,11 +70,9 @@ fn has_line(log: &[String], wanted: &str) -> bool {
 #[test]
 fn check_tools_confirms_the_expected_streamrip_version() {
     let dir = tempfile::tempdir().unwrap();
-    let mut log = Vec::new();
-    let mut run = Run::check_tools(
-        script_rip(dir.path(), "echo 'rip, version 2.2.0'"),
-        &mut log,
-    );
+    let settings = settings_with_script_rip(dir.path(), "echo 'rip, version 2.2.0'");
+    let mut log = vec!["left from the last Run".to_owned()];
+    let mut run = started(&settings, Request::CheckTools, dir.path(), &mut log);
     run_to_end(&mut run, &mut log);
 
     assert_eq!(
@@ -75,11 +86,9 @@ fn check_tools_confirms_the_expected_streamrip_version() {
 #[test]
 fn check_tools_warns_about_another_streamrip_version() {
     let dir = tempfile::tempdir().unwrap();
+    let settings = settings_with_script_rip(dir.path(), "echo 'rip, version 2.1.0'");
     let mut log = Vec::new();
-    let mut run = Run::check_tools(
-        script_rip(dir.path(), "echo 'rip, version 2.1.0'"),
-        &mut log,
-    );
+    let mut run = started(&settings, Request::CheckTools, dir.path(), &mut log);
     run_to_end(&mut run, &mut log);
 
     assert!(has_line(
@@ -92,13 +101,13 @@ fn check_tools_warns_about_another_streamrip_version() {
 /// A missing `rip` is a problem, and Check tools still checks rsync.
 #[test]
 fn missing_rip_is_a_problem_and_rsync_is_still_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = Settings {
+        rip_executable: Some(PathBuf::from("/nonexistent/rip")),
+        ..Settings::default()
+    };
     let mut log = Vec::new();
-    let mut run = Run::check_tools(
-        ToolEnv::Native {
-            rip: Some(PathBuf::from("/nonexistent/rip")),
-        },
-        &mut log,
-    );
+    let mut run = started(&settings, Request::CheckTools, dir.path(), &mut log);
     run_to_end(&mut run, &mut log);
 
     assert_eq!(log[0], "$ rip --version");
@@ -113,11 +122,9 @@ fn missing_rip_is_a_problem_and_rsync_is_still_checked() {
 #[test]
 fn cancel_stops_rip_and_skips_the_rest() {
     let dir = tempfile::tempdir().unwrap();
+    let settings = settings_with_script_rip(dir.path(), "echo started; exec sleep 30");
     let mut log = Vec::new();
-    let mut run = Run::check_tools(
-        script_rip(dir.path(), "echo started; exec sleep 30"),
-        &mut log,
-    );
+    let mut run = started(&settings, Request::CheckTools, dir.path(), &mut log);
     while !has_line(&log, "started") {
         run.poll(&mut log);
         std::thread::sleep(Duration::from_millis(10));
@@ -133,41 +140,77 @@ fn cancel_stops_rip_and_skips_the_rest() {
 
 // == Downloads ================================================================
 
-/// A Download logs rip's output and no version check, then finishes.
+/// A first Download creates the Streamrip config from the personal one,
+/// logs where it came from, and passes it to `rip`.
 #[test]
-fn successful_download_has_no_version_check() {
+fn first_download_creates_the_streamrip_config_and_runs_rip() {
     let dir = tempfile::tempdir().unwrap();
-    let mut log = Vec::new();
-    let mut run = Run::download(
-        script_rip(dir.path(), "echo 'Downloading track'"),
-        rip_spec(&["url", "https://open.qobuz.com/track/1"]),
+    let settings = settings_with_script_rip(dir.path(), "echo 'Downloading track'");
+    let config = places_in(dir.path()).streamrip_config.unwrap();
+    let mut log = vec!["left from the last Run".to_owned()];
+    let mut run = started(
+        &settings,
+        download(&["https://open.qobuz.com/track/1"]),
+        dir.path(),
         &mut log,
     );
     run_to_end(&mut run, &mut log);
 
+    let config = config.display();
     assert_eq!(
         log,
         [
-            "$ rip url https://open.qobuz.com/track/1",
-            "Downloading track"
+            format!(
+                "Created the Streamrip config at {config} from your personal \
+                 streamrip config"
+            ),
+            format!("$ rip --config-path {config} url https://open.qobuz.com/track/1"),
+            "Downloading track".to_owned(),
         ]
     );
     assert_eq!(run.status(), "Download finished");
+}
+
+/// A Download with the Streamrip config already there logs no line about
+/// it, and passes the Quality asked for to `rip`.
+#[test]
+fn later_download_says_nothing_about_the_streamrip_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let settings = settings_with_script_rip(dir.path(), "true");
+    let mut log = Vec::new();
+    let mut run = started(&settings, download(&["one"]), dir.path(), &mut log);
+    run_to_end(&mut run, &mut log);
+
+    let request = Request::Download {
+        urls: vec!["two".to_owned()],
+        quality: Some(1),
+    };
+    let mut run = started(&settings, request, dir.path(), &mut log);
+    run_to_end(&mut run, &mut log);
+
+    assert_eq!(log.len(), 1, "{log:#?}");
+    assert!(log[0].ends_with(" -q 1 url two"), "{log:#?}");
 }
 
 /// A failed Download logs rip's error and its exit code as one problem.
 #[test]
 fn failed_download_reports_the_exit_code() {
     let dir = tempfile::tempdir().unwrap();
+    let settings = settings_with_script_rip(dir.path(), "echo 'Error: bad url' >&2; exit 1");
     let mut log = Vec::new();
-    let mut run = Run::download(
-        script_rip(dir.path(), "echo 'Error: bad url' >&2; exit 1"),
-        rip_spec(&["url", "nope"]),
-        &mut log,
-    );
+    let mut run = started(&settings, download(&["nope"]), dir.path(), &mut log);
     run_to_end(&mut run, &mut log);
 
+    assert!(
+        log.iter()
+            .any(|line| line.starts_with("$ rip --config-path "))
+    );
     assert!(has_line(&log, "Error: bad url"));
-    assert!(has_line(&log, "✗ rip url nope failed with exit code 1"));
+    assert!(
+        log.last()
+            .unwrap()
+            .ends_with(" url nope failed with exit code 1"),
+        "{log:#?}"
+    );
     assert_eq!(run.status(), "Download: 1 problem, see the log");
 }
