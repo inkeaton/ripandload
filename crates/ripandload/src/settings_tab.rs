@@ -17,7 +17,7 @@
 use eframe::egui;
 use ripandload_core::error::error_chain;
 use ripandload_core::settings::{FOLDER_PLACEHOLDERS, Settings, TRACK_PLACEHOLDERS};
-use ripandload_core::source::Source;
+use ripandload_core::source::{Source, quality_label};
 use ripandload_core::start;
 use ripandload_core::tool_env::WSL_RIP;
 
@@ -268,10 +268,10 @@ fn secret(ui: &mut egui::Ui, id: &str, value: &mut String) {
 /// Draws a picker of `source`'s Quality levels into `ui`, editing `level`.
 fn level_picker(ui: &mut egui::Ui, source: Source, level: &mut u8) {
     egui::ComboBox::from_id_salt((source, "quality"))
-        .selected_text(format!("{level}: {}", source.quality_label(*level)))
+        .selected_text(format!("{level}: {}", quality_label(*level)))
         .show_ui(ui, |ui| {
             for option in source.quality_levels() {
-                let label = format!("{option}: {}", source.quality_label(option));
+                let label = format!("{option}: {}", quality_label(option));
                 ui.selectable_value(level, option, label);
             }
         });

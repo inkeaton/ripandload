@@ -150,48 +150,6 @@ pub fn render(
     Ok(seeded)
 }
 
-// == Managed keys =============================================================
-
-/// Sets `key` in `[table]` to `value`, adding the table or key if missing.
-///
-/// The comments around an existing value are kept, so the file stays
-/// readable to someone who opens it, and an inline table stays inline. A
-/// `table` that isn't a table (`deezer = 2`, or an array of tables) is
-/// replaced by an empty table first: streamrip couldn't read that file
-/// anyway.
-///
-/// # Arguments
-///
-/// - `doc`: the parsed Streamrip config, changed in place.
-/// - `table`: the table's name, e.g. `qobuz`.
-/// - `key`: the key's name inside the table.
-/// - `value`: the new value. Its type may differ from the old value's.
-///
-/// # Panics
-///
-/// Doesn't panic: its one `expect` is reached only after `table` has been
-/// made a table.
-pub fn set_managed(doc: &mut DocumentMut, table: &str, key: &str, value: impl Into<Value>) {
-    if !doc.get(table).is_some_and(toml_edit::Item::is_table_like) {
-        doc.insert(table, toml_edit::table());
-    }
-    let table = doc[table]
-        .as_table_like_mut()
-        .expect("just made it a table");
-    let mut value = value.into();
-    match table.get_mut(key) {
-        Some(item) => {
-            if let Some(old) = item.as_value() {
-                *value.decor_mut() = old.decor().clone();
-            }
-            *item = toml_edit::Item::Value(value);
-        }
-        None => {
-            table.insert(key, toml_edit::Item::Value(value));
-        }
-    }
-}
-
 // == Qobuz app ID =============================================================
 
 /// Returns the Qobuz `app_id` streamrip saved in the Streamrip config.
@@ -376,6 +334,48 @@ fn apply(
     set_managed(doc, "database", "downloads_path", downloads_db);
     set_managed(doc, "database", "failed_downloads_path", failed_db);
     Ok(())
+}
+
+// == Managed keys =============================================================
+
+/// Sets `key` in `[table]` to `value`, adding the table or key if missing.
+///
+/// The comments around an existing value are kept, so the file stays
+/// readable to someone who opens it, and an inline table stays inline. A
+/// `table` that isn't a table (`deezer = 2`, or an array of tables) is
+/// replaced by an empty table first: streamrip couldn't read that file
+/// anyway.
+///
+/// # Arguments
+///
+/// - `doc`: the parsed Streamrip config, changed in place.
+/// - `table`: the table's name, e.g. `qobuz`.
+/// - `key`: the key's name inside the table.
+/// - `value`: the new value. Its type may differ from the old value's.
+///
+/// # Panics
+///
+/// Doesn't panic: its one `expect` is reached only after `table` has been
+/// made a table.
+fn set_managed(doc: &mut DocumentMut, table: &str, key: &str, value: impl Into<Value>) {
+    if !doc.get(table).is_some_and(toml_edit::Item::is_table_like) {
+        doc.insert(table, toml_edit::table());
+    }
+    let table = doc[table]
+        .as_table_like_mut()
+        .expect("just made it a table");
+    let mut value = value.into();
+    match table.get_mut(key) {
+        Some(item) => {
+            if let Some(old) = item.as_value() {
+                *value.decor_mut() = old.decor().clone();
+            }
+            *item = toml_edit::Item::Value(value);
+        }
+        None => {
+            table.insert(key, toml_edit::Item::Value(value));
+        }
+    }
 }
 
 // == Helpers ==================================================================

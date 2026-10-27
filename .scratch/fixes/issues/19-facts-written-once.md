@@ -1,6 +1,6 @@
 # 19 – Quality labels per level, one SSH key path, private `set_managed`
 
-Status: ready-for-agent
+Status: ready-for-human
 Blocked by: 18
 
 Part of `../spec.md`. Decided in `../../architecture/issues/07-single-source-facts.md` (see its Answer). Blocked by 18 (`download_tab.rs`), which is after 16 (`tool_env.rs`).
@@ -13,8 +13,8 @@ Part of `../spec.md`. Decided in `../../architecture/issues/07-single-source-fac
 
 ## Acceptance
 
-- [ ] Tests: one Source gives all its levels; Qobuz and Deezer mixed give exactly 1 and 2 with the shared labels; no Sources give nothing; `COPY_SSH_KEY` copies to and chmods `WSL_SSH_KEY`.
-- [ ] `rg ripandload_key crates` finds only the macro.
-- [ ] `dev/check.sh` passes; one commit.
+- [x] Tests: one Source gives all its levels; Qobuz and Deezer mixed give exactly 1 and 2 with the shared labels; no Sources give nothing; `COPY_SSH_KEY` copies to and chmods `WSL_SSH_KEY`.
+- [x] `rg ripandload_key crates` finds only the macro.
+- [x] `dev/check.sh` passes; one commit.
 
 ## Comments

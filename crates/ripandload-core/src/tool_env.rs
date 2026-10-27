@@ -194,10 +194,10 @@ impl ToolEnv {
 
     /// Returns `server` with its SSH key where the tools can use it.
     ///
-    /// Inside WSL, ssh refuses a key on `/mnt/c`, so the key is copied to
-    /// `~/.ssh/ripandload_key` inside WSL with mode 0600, and the returned
-    /// Server points there. Natively, or when `server` has no SSH key, it's
-    /// returned as it is.
+    /// Inside WSL, ssh refuses a key on `/mnt/c`, so the key is copied into
+    /// `~/.ssh` inside WSL with mode 0600, and the returned Server points
+    /// there. Natively, or when `server` has no SSH key, it's returned as it
+    /// is.
     ///
     /// # Returns
     ///
@@ -288,18 +288,38 @@ const WSL_WRAPPER: &str = r#"echo $$ > /tmp/ripandload.pid; export RIPANDLOAD_PR
 /// belong to anything by now.
 const KILL_RECORDED: &str = r#"pid=$(cat /tmp/ripandload.pid) && grep -qz '^RIPANDLOAD_PROCESS=1$' /proc/"$pid"/environ && { pkill -TERM -P "$pid"; kill -TERM "$pid"; }"#;
 
+/// Expands to the path the SSH key is copied to inside WSL, as a literal.
+///
+/// A macro rather than a `const`, so that [`WSL_SSH_KEY`] and
+/// [`COPY_SSH_KEY`] can both be built from it with `concat!`.
+///
+/// # Format
+///
+/// ```text
+/// wsl_ssh_key!()
+/// ```
+macro_rules! wsl_ssh_key {
+    () => {
+        "~/.ssh/ripandload_key"
+    };
+}
+
 /// Where the SSH key is copied inside WSL.
 ///
 /// ssh refuses a key on `/mnt/c`, where every Windows file looks
-/// world-readable. [`COPY_SSH_KEY`] spells out the same path, so the two
-/// must agree.
-const WSL_SSH_KEY: &str = "~/.ssh/ripandload_key";
+/// world-readable.
+const WSL_SSH_KEY: &str = wsl_ssh_key!();
 
 /// The `sh` script that copies the SSH key to [`WSL_SSH_KEY`], mode 0600.
 ///
 /// `$1` is the key's path as WSL sees it. `umask 077` keeps `~/.ssh` and the
 /// copy private from the moment they're created.
-const COPY_SSH_KEY: &str = r#"umask 077 && mkdir -p ~/.ssh && cp "$1" ~/.ssh/ripandload_key && chmod 600 ~/.ssh/ripandload_key"#;
+const COPY_SSH_KEY: &str = concat!(
+    r#"umask 077 && mkdir -p ~/.ssh && cp "$1" "#,
+    wsl_ssh_key!(),
+    " && chmod 600 ",
+    wsl_ssh_key!()
+);
 
 /// Returns `wsl.exe [-d <distro>] --exec`, ready for a program to append.
 ///
@@ -611,7 +631,7 @@ mod tests {
         let (server, copy) = debian()
             .ssh_ready(&server(Some(r"C:\Users\a\.ssh\navidrome key")))
             .unwrap();
-        assert_eq!(server.ssh_key, Some(PathBuf::from("~/.ssh/ripandload_key")));
+        assert_eq!(server.ssh_key, Some(PathBuf::from(WSL_SSH_KEY)));
         assert_eq!(server.host, "music.example.org");
         let copy = copy.unwrap();
         assert_eq!(copy.program, Tool::Sh);
@@ -625,8 +645,8 @@ mod tests {
             ]
         );
         assert!(COPY_SSH_KEY.contains("umask 077"));
-        assert!(COPY_SSH_KEY.contains(r#"cp "$1" ~/.ssh/ripandload_key"#));
-        assert!(COPY_SSH_KEY.contains("chmod 600 ~/.ssh/ripandload_key"));
+        assert!(COPY_SSH_KEY.contains(&format!(r#"cp "$1" {WSL_SSH_KEY}"#)));
+        assert!(COPY_SSH_KEY.contains(&format!("chmod 600 {WSL_SSH_KEY}")));
     }
 
     /// Inside WSL, a Server without an SSH key has nothing to copy.

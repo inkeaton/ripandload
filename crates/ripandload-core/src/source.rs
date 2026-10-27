@@ -1,9 +1,10 @@
 //! The Sources the app downloads from, and their Quality levels.
 //!
-//! A pasted URL is matched to its [`Source`] by its host alone. Each Source
-//! has its own Quality levels, numbered as streamrip numbers them, and
-//! [`quality_choices`] works out which of them a Download that mixes Sources
-//! can still offer.
+//! A pasted URL is matched to its [`Source`] by its host alone. streamrip
+//! numbers Quality levels the same for every Source, from 0 (MP3 128 kbps)
+//! to 4 (Hi-Res above 96 kHz), and [`quality_label`] names them. Each Source
+//! has only some of them, and [`quality_choices`] works out which a
+//! Download that mixes Sources can still offer.
 //!
 //! This module doesn't look inside a URL's path. The Preview, in
 //! [`preview`], finds out whether it names an album, a track or a playlist.
@@ -78,37 +79,11 @@ impl Source {
     /// Returns this Source's Quality levels, lowest first.
     ///
     /// The numbers are the ones streamrip's config and its `-q` option use.
-    /// [`Source::quality_label`] names each one.
+    /// [`quality_label`] names each one.
     pub fn quality_levels(self) -> RangeInclusive<u8> {
         match self {
-            // 1 = MP3 320, 2 = 16/44.1, 3 = 24/≤96, 4 = 24/>96.
             Source::Qobuz => 1..=4,
-            // 0 = MP3 128, 1 = MP3 320, 2 = FLAC.
             Source::Deezer => 0..=2,
-        }
-    }
-
-    /// Returns the label Settings show for one of this Source's Quality levels.
-    ///
-    /// # Arguments
-    ///
-    /// - `level`: a Quality level, numbered as streamrip numbers it for this
-    ///   Source.
-    ///
-    /// # Returns
-    ///
-    /// The label, e.g. `FLAC` or `MP3 320 kbps`, or `unknown` when `level`
-    /// isn't one of [`Source::quality_levels`].
-    pub fn quality_label(self, level: u8) -> &'static str {
-        match (self, level) {
-            (Source::Qobuz, 1) => "MP3 320 kbps",
-            (Source::Qobuz, 2) => "CD (16-bit / 44.1 kHz)",
-            (Source::Qobuz, 3) => "Hi-Res (24-bit / ≤96 kHz)",
-            (Source::Qobuz, 4) => "Hi-Res (24-bit / >96 kHz)",
-            (Source::Deezer, 0) => "MP3 128 kbps",
-            (Source::Deezer, 1) => "MP3 320 kbps",
-            (Source::Deezer, 2) => "FLAC",
-            _ => "unknown",
         }
     }
 }
@@ -123,14 +98,35 @@ impl fmt::Display for Source {
     }
 }
 
-// == Quality choices ==========================================================
+// == Quality levels ===========================================================
+
+/// Returns the label shown for a Quality level.
+///
+/// # Arguments
+///
+/// - `level`: a Quality level, numbered as streamrip numbers it. The number
+///   means the same for every Source.
+///
+/// # Returns
+///
+/// The label, e.g. `MP3 320 kbps` or `CD (16-bit / 44.1 kHz)`, or `unknown`
+/// when `level` is above 4.
+pub fn quality_label(level: u8) -> &'static str {
+    match level {
+        0 => "MP3 128 kbps",
+        1 => "MP3 320 kbps",
+        2 => "CD (16-bit / 44.1 kHz)",
+        3 => "Hi-Res (24-bit / ≤96 kHz)",
+        4 => "Hi-Res (24-bit / >96 kHz)",
+        _ => "unknown",
+    }
+}
 
 /// Returns the Quality levels a Download of `sources` can be overridden to.
 ///
 /// streamrip's `-q` applies one level to every Source, and a level a Source
 /// doesn't have breaks that Source's part of the Download. So a Download
-/// that mixes Sources only offers the levels they all share, with labels
-/// that hold for each of them.
+/// that mixes Sources only offers the levels they all share.
 ///
 /// # Arguments
 ///
@@ -139,24 +135,23 @@ impl fmt::Display for Source {
 ///
 /// # Returns
 ///
-/// `(level, label)` pairs, lowest level first:
-///
-/// - every level of the Source, labeled by [`Source::quality_label`], when
-///   `sources` holds only one Source;
-/// - levels 1 (MP3 320) and 2 (16-bit FLAC) when it mixes Qobuz and Deezer;
-/// - nothing when `sources` is empty.
+/// `(level, label)` pairs, lowest level first, labeled by
+/// [`quality_label`]: the levels that all of `sources`'
+/// [`Source::quality_levels`] share. Nothing when `sources` is empty or
+/// shares no level.
 pub fn quality_choices(sources: &[Source]) -> Vec<(u8, &'static str)> {
     let Some((&first, rest)) = sources.split_first() else {
         return Vec::new();
     };
-    if rest.iter().all(|&source| source == first) {
-        return first
-            .quality_levels()
-            .map(|level| (level, first.quality_label(level)))
-            .collect();
+    let (mut low, mut high) = first.quality_levels().into_inner();
+    for source in rest {
+        let (source_low, source_high) = source.quality_levels().into_inner();
+        low = low.max(source_low);
+        high = high.min(source_high);
     }
-    // Qobuz and Deezer share 1 (MP3 320) and 2 (16-bit FLAC).
-    vec![(1, "MP3 320 kbps"), (2, "CD quality (16-bit FLAC)")]
+    return (low..=high)
+        .map(|level| (level, quality_label(level)))
+        .collect();
 }
 
 // == Tests ====================================================================
@@ -258,7 +253,11 @@ mod tests {
     fn one_source_offers_its_own_levels_and_labels() {
         assert_eq!(
             quality_choices(&[Source::Deezer]),
-            [(0, "MP3 128 kbps"), (1, "MP3 320 kbps"), (2, "FLAC")]
+            [
+                (0, "MP3 128 kbps"),
+                (1, "MP3 320 kbps"),
+                (2, "CD (16-bit / 44.1 kHz)"),
+            ]
         );
         assert_eq!(
             quality_choices(&[Source::Qobuz, Source::Qobuz]),
@@ -274,7 +273,7 @@ mod tests {
     /// Mixed Sources, in any order, offer only the levels they share.
     #[test]
     fn mixed_sources_offer_only_the_shared_levels() {
-        let expected = [(1, "MP3 320 kbps"), (2, "CD quality (16-bit FLAC)")];
+        let expected = [(1, "MP3 320 kbps"), (2, "CD (16-bit / 44.1 kHz)")];
         assert_eq!(quality_choices(&[Source::Qobuz, Source::Deezer]), expected);
         assert_eq!(
             quality_choices(&[Source::Deezer, Source::Qobuz, Source::Deezer]),
