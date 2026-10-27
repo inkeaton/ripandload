@@ -25,6 +25,7 @@ Each of the seven deepening candidates from the architecture review of 2026-10-2
 - **08 Typed log lines**: no for now; the Log stays glyph-prefixed strings. Revisit when something besides plain drawing needs a line's kind (e.g. colouring), by widening ticket 04's `Note`, not by parsing glyphs. No ADR. See `issues/08-typed-log-lines.md`.
 - **05 Settings tab**: returns `Action { Save, CheckTools, TestConnection }`; unsaved-changes stays in the app; one `PathPicker` struct; `ssh_key` becomes `Option<PathBuf>` and an empty Staging folder a `SettingsProblem`. Fixes 16 (core) then 17 (GUI). See `issues/05-settings-tab-actions.md`.
 - **06 Previews**: `QobuzAccess` cached per round (cleared by `retry`), path from `Places`, no Source passed (`fetch` finds it); `state_of` a pure GUI mapping; named `Finished`. Fix 18. See `issues/06-preview-lookup-inputs.md`.
+- **07 Facts written twice**: Quality labels per level and `quality_choices` an intersection (yes); no `MANAGED_KEYS` table, `set_managed` private (no); the SSH key path from one `concat!` literal (yes). Fix 19. See `issues/07-single-source-facts.md`.
 
 ## Not yet specified
 
