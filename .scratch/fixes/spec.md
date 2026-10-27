@@ -18,6 +18,7 @@ Bugs first, then smells. Tickets that touch the same file run in sequence (`Bloc
 | 08 GUI tab smells | `upload_tab.rs`, `settings_tab.rs`, `app.rs`, new `wording.rs` | 06 |
 | 09 Run smells | `job_run.rs` | none |
 | 10 Test fixture names | `source.rs`, `tests/ssh_target.rs`, `streamrip_config.rs` | 03, 09 |
+| 11 `job` names become Run and Process | `job.rs`, `job_run.rs`, `error.rs`, `tool_env.rs`, `app.rs`, GUI tabs, tests | none |
 
 ## Standing rules
 

@@ -1,7 +1,7 @@
 # 01 – Glossary: runs, the app's actions and the missing terms
 
 Type: grilling
-Status: open
+Status: resolved
 Blocked by: none
 
 Part of `../map.md`.
@@ -21,3 +21,17 @@ What are the app's runs and actions called, and what do the terms the doc-commen
 - `GLOSSARY.md` updated inline as each term settles.
 - A decision on renaming: which identifiers change (GUI only, or core's `Job`/`JobRun` too, e.g. to `Process`/`Run`), recorded here; if any rename is agreed, an implementation ticket for it in `../fixes/issues/`, blocked by the fix tickets touching the same files.
 - An ADR only if keeping `Job`/`JobRun` against the glossary is a deliberate, lasting choice.
+
+## Answer
+
+Grilled 2026-10-27.
+
+**Glossary** (`GLOSSARY.md`, updated): **Run** is one Check tools, Download, Upload, Compare with Server or Test connection, one at a time; _Avoid_ job, task, operation. New entries: Check tools, Test connection, Compare with Server, Cancel, Personal streamrip config, Log, Log file, Live display, Status bar (_Avoid_ "status line"). Server gains "the active Server is the one Runs use"; Settings gains "kept in the Settings file". No entries for single tracks and disc folder (already inside Album folder), share link (a Deezer detail), log folder, or the GUI's `Action` (implementation vocabulary).
+
+**Renames** (all agreed, no ADR since nothing is kept against the glossary):
+
+- Core: `JobRun` → `Run` (`run.rs`), `Job` → `Process` (`process.rs`), `JobEvent` → `ProcessEvent`, `JobError` → `ProcessError`. "Process" stays out of the glossary.
+- GUI: `job` → `run`, `job_running` → `run_going`, `start_job`/`poll_job`/`cancel_job`/`job_finished` → `*_run`/`run_finished`, `JOB_POLL_INTERVAL` → `RUN_POLL_INTERVAL`.
+- `RIPANDLOAD_JOB` → `RIPANDLOAD_PROCESS` (lives only as long as the process; nothing persisted).
+
+Implementation: `../../fixes/issues/11-job-to-run-and-process.md`, one mechanical commit, landing before any deepening. Every implementation ticket from tickets 02–08 is blocked by fix 11 and uses the new names.
