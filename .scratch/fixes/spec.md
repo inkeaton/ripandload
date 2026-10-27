@@ -25,6 +25,7 @@ Bugs first, then smells. Tickets that touch the same file run in sequence (`Bloc
 | 15 Each kind of Run in its own file | `run.rs`, new `run/*.rs`, `start.rs` | 14 |
 | 16 Optional SSH key, empty Staging folder a problem | `settings.rs`, `command.rs`, `tool_env.rs`, GUI `ssh_key` uses | 15 |
 | 17 Settings tab Action and one path picker | `settings_tab.rs`, new `path_picker.rs`, `app.rs` | 16 |
+| 18 Previews read the Qobuz `app_id` once per round | `download_tab.rs`, `app.rs` | 17 |
 
 ## Standing rules
 
