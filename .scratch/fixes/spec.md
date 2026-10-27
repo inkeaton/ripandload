@@ -23,6 +23,8 @@ Bugs first, then smells. Tickets that touch the same file run in sequence (`Bloc
 | 13 The app starts Runs through `start` | `app.rs`, `upload_tab.rs`, `settings_tab.rs`, `run.rs` | 12 |
 | 14 The Run hands over its Outcome | `process.rs`, `run.rs`, `start.rs`, `error.rs`, `app.rs`, tests | 13 |
 | 15 Each kind of Run in its own file | `run.rs`, new `run/*.rs`, `start.rs` | 14 |
+| 16 Optional SSH key, empty Staging folder a problem | `settings.rs`, `command.rs`, `tool_env.rs`, GUI `ssh_key` uses | 15 |
+| 17 Settings tab Action and one path picker | `settings_tab.rs`, new `path_picker.rs`, `app.rs` | 16 |
 
 ## Standing rules
 
