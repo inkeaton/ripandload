@@ -1,6 +1,6 @@
 # 07 – Staging entries as a named type
 
-Status: ready-for-agent
+Status: done
 Blocked by: none
 
 Part of `../spec.md`. First noted in `../../doc-comments/issues/12-preview-and-staging.md`.

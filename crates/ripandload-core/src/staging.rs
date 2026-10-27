@@ -170,7 +170,7 @@ pub fn music_groups(folder: &Path) -> Result<Vec<MusicGroup>, StagingError> {
 /// listed.
 pub fn count_files(folder: &Path) -> Result<usize, StagingError> {
     let mut count = 0;
-    for (path, is_dir) in entries(folder)? {
+    for Entry { path, is_dir } in entries(folder)? {
         count += if is_dir { count_files(&path)? } else { 1 };
     }
     Ok(count)
@@ -269,7 +269,7 @@ pub fn clear(folder: &Path) -> Result<usize, StagingError> {
         });
     }
     let count = count_files(folder)?;
-    for (path, is_dir) in entries(folder)? {
+    for Entry { path, is_dir } in entries(folder)? {
         let removed = if is_dir {
             fs::remove_dir_all(&path)
         } else {
@@ -305,7 +305,7 @@ fn is_unsafe_to_clear(folder: &Path) -> bool {
 /// [`StagingError::Read`] if `folder` or a folder below it couldn't be
 /// listed.
 fn collect_music(root: &Path, folder: &Path, files: &mut Vec<PathBuf>) -> Result<(), StagingError> {
-    for (path, is_dir) in entries(folder)? {
+    for Entry { path, is_dir } in entries(folder)? {
         if is_dir {
             collect_music(root, &path, files)?;
         } else if is_music(&path) {
@@ -354,20 +354,30 @@ fn is_disc_folder(name: &str) -> bool {
     !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+// == Internal types ===========================================================
+
+/// One entry in a folder, as [`entries`] lists it.
+struct Entry {
+    /// The entry's path, `folder` joined with its name.
+    path: PathBuf,
+    /// Whether the entry is a folder; false for a symlink.
+    is_dir: bool,
+}
+
 // == Helpers ==================================================================
 
 /// Lists the entries in `folder`, in the order the OS gives them.
 ///
 /// # Returns
 ///
-/// `(path, is_dir)` for each entry, or nothing if `folder` doesn't exist.
-/// `is_dir` is false for a symlink, even one to a folder.
+/// Each entry's path and whether it is a folder, or nothing if `folder`
+/// doesn't exist. A symlink is never a folder, even one to a folder.
 ///
 /// # Errors
 ///
 /// [`StagingError::Read`] if `folder` exists but couldn't be listed, or an
 /// entry's type couldn't be read.
-fn entries(folder: &Path) -> Result<Vec<(PathBuf, bool)>, StagingError> {
+fn entries(folder: &Path) -> Result<Vec<Entry>, StagingError> {
     let read_err = |path: &Path| {
         let path = path.to_owned();
         move |source| StagingError::Read { path, source }
@@ -382,7 +392,10 @@ fn entries(folder: &Path) -> Result<Vec<(PathBuf, bool)>, StagingError> {
             let entry = entry.map_err(read_err(folder))?;
             let path = entry.path();
             let file_type = entry.file_type().map_err(read_err(&path))?;
-            Ok((path, file_type.is_dir()))
+            Ok(Entry {
+                path,
+                is_dir: file_type.is_dir(),
+            })
         })
         .collect()
 }
