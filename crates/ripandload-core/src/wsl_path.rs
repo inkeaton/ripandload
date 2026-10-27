@@ -7,9 +7,9 @@
 //! `\\wsl.localhost\<distro>\…`.
 //!
 //! Both translations work on the path's text alone, so they behave the same
-//! on Linux and Windows and never touch the disk. Choosing between them, and
-//! checking that a share path is in the tools' own distro, is
-//! [`ToolEnv::tool_path`]'s job.
+//! on Linux and Windows and never touch the disk. [`ToolEnv::tool_path`]
+//! chooses between them and checks that a share path is in the tools' own
+//! distro.
 //!
 //! [`ToolEnv::tool_path`]: crate::tool_env::ToolEnv::tool_path
 

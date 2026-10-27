@@ -112,7 +112,7 @@ pub enum Action {
 /// - `scan`: the last read of the Staging folder, read again when stale.
 /// - `comparison`: the last Comparison, if any. One made of another Staging
 ///   folder is ignored.
-/// - `job_running`: whether a run is going.
+/// - `run_going`: whether a run is going.
 ///
 /// # Returns
 ///
@@ -125,7 +125,7 @@ pub fn show(
     staging_folder: &Path,
     scan: &mut StagingScan,
     comparison: Option<&Comparison>,
-    job_running: bool,
+    run_going: bool,
 ) -> Action {
     let server_ready = server.is_some_and(Server::is_set_up);
     let contents = scan.get(staging_folder);
@@ -175,7 +175,7 @@ pub fn show(
     let mut action = Action::None;
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(!job_running && server_ready, egui::Button::new("Upload"))
+            .add_enabled(!run_going && server_ready, egui::Button::new("Upload"))
             .on_hover_text(
                 "Copies the Staging folder to the Server. Nothing on the Server is deleted.",
             )
@@ -184,14 +184,14 @@ pub fn show(
             action = Action::Upload;
         }
         if ui
-            .add_enabled(job_running, egui::Button::new("Cancel"))
+            .add_enabled(run_going, egui::Button::new("Cancel"))
             .clicked()
         {
             action = Action::Cancel;
         }
         if ui
             .add_enabled(
-                !job_running && server_ready,
+                !run_going && server_ready,
                 egui::Button::new("Compare with Server"),
             )
             .on_hover_text("Asks the Server which files it already has. Sends nothing.")
@@ -201,7 +201,7 @@ pub fn show(
         }
         ui.separator();
         if ui
-            .add_enabled(!job_running, egui::Button::new("Clear…"))
+            .add_enabled(!run_going, egui::Button::new("Clear…"))
             .on_hover_text("Deletes everything in the Staging folder, after asking")
             .clicked()
         {

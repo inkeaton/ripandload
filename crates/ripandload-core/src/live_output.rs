@@ -6,7 +6,7 @@
 //! which never change again and go to the log, and the live rows, which show
 //! progress and never reach the log.
 //!
-//! This module reads no process and writes no log. [`JobRun`] feeds it a
+//! This module reads no process and writes no log. [`Run`] feeds it a
 //! Download's output and decides where the lines go.
 //!
 //! # How rich draws
@@ -30,7 +30,7 @@
 //!
 //! Colors, hyperlinks and anything else are skipped.
 //!
-//! [`JobRun`]: crate::job_run::JobRun
+//! [`Run`]: crate::run::Run
 
 /// The byte that starts an escape sequence.
 const ESC: u8 = 0x1b;

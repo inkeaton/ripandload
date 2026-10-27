@@ -1,17 +1,17 @@
 //! One process run in the background, with its output streamed back.
 //!
-//! A [`Job`] starts a process and watches it from threads of its own: one
-//! per output stream, and one that waits for the process to exit. What they
-//! see arrives as [`JobEvent`]s on a channel, which the GUI polls each
-//! frame, so it never blocks on the process. [`JobEvent::Finished`] is
-//! always the last event.
+//! A [`Process`] starts a command and watches it from threads of its own: one
+//! per output stream, and an exit thread that waits for the process to
+//! exit. What they see arrives as [`ProcessEvent`]s on a channel, which the
+//! GUI polls each frame, so it never blocks on the process.
+//! [`ProcessEvent::Finished`] is always the last event.
 //!
 //! This module runs a [`Command`] as it is given and knows nothing about
-//! tools or WSL. Building the command is [`ToolEnv::command`]'s job, and
-//! running a sequence of them and writing the log is [`JobRun`]'s.
+//! tools or WSL. [`ToolEnv::command`] builds the command, and [`Run`] runs a
+//! sequence of them and writes the log.
 //!
 //! [`ToolEnv::command`]: crate::tool_env::ToolEnv::command
-//! [`JobRun`]: crate::job_run::JobRun
+//! [`Run`]: crate::run::Run
 
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, ExitStatus};
@@ -21,25 +21,25 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::error::JobError;
+use crate::error::ProcessError;
 use crate::wsl_output::decode_tool_output;
 
-/// How often the job thread checks whether the process exited, its output
+/// How often the exit thread checks whether the process exited, its output
 /// was read to the end, or it was cancelled.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 // == Events ===================================================================
 
-/// What a running [`Job`] reports.
+/// What a running [`Process`] reports.
 ///
-/// A job started with [`Job::spawn`] sends `Line`s, one started with
-/// [`Job::spawn_raw`] sends `Output`, and both end with one `Finished`.
+/// A process started with [`Process::spawn`] sends `Line`s, one started with
+/// [`Process::spawn_raw`] sends `Output`, and both end with one `Finished`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JobEvent {
+pub enum ProcessEvent {
     /// One line of stdout or stderr, without its line ending.
     Line(String),
     /// The next bytes of stdout or stderr, as they came, from
-    /// [`Job::spawn_raw`].
+    /// [`Process::spawn_raw`].
     Output {
         /// The stream the bytes came from.
         stream: Stream,
@@ -50,7 +50,7 @@ pub enum JobEvent {
     Finished(Outcome),
 }
 
-/// Which output stream of the process a [`JobEvent::Output`] came from.
+/// Which output stream of the process a [`ProcessEvent::Output`] came from.
 ///
 /// Each is a separate stream of bytes, so a chunk of one can land in the
 /// middle of a line of the other.
@@ -62,7 +62,7 @@ pub enum Stream {
     Stderr,
 }
 
-/// How a [`Job`]'s process ended.
+/// How a [`Process`] ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     /// It exited with a success status.
@@ -73,7 +73,7 @@ pub enum Outcome {
         /// signal or its status couldn't be read.
         code: Option<i32>,
     },
-    /// It was killed by [`Job::cancel`].
+    /// It was killed by [`Process::cancel`].
     Cancelled,
 }
 
@@ -90,54 +90,54 @@ impl From<ExitStatus> for Outcome {
     }
 }
 
-// == Jobs =====================================================================
+// == Processes ================================================================
 
 /// A process running in the background, with its output streamed back.
 ///
-/// Dropping a `Job` cancels it.
+/// Dropping a `Process` cancels it.
 #[derive(Debug)]
-pub struct Job {
-    /// The events the job's threads send, in the order they happened.
-    events: Receiver<JobEvent>,
-    /// Set by [`Job::cancel`]; the job thread kills the process once it sees
-    /// it.
+pub struct Process {
+    /// The events the process's threads send, in the order they happened.
+    events: Receiver<ProcessEvent>,
+    /// Set by [`Process::cancel`]; the exit thread kills the process once
+    /// it sees it.
     cancelled: Arc<AtomicBool>,
 }
 
-impl Job {
+impl Process {
     /// Starts `command` and streams its output line by line.
     ///
     /// Only the streams set to `Stdio::piped()` are read, as
     /// [`ToolEnv::command`] sets both. Each line arrives as a
-    /// [`JobEvent::Line`], decoded with [`decode_tool_output`].
+    /// [`ProcessEvent::Line`], decoded with [`decode_tool_output`].
     ///
     /// # Errors
     ///
-    /// [`JobError::Spawn`] if the process can't be started, e.g. because the
-    /// program doesn't exist.
+    /// [`ProcessError::Spawn`] if the process can't be started, e.g. because
+    /// the program doesn't exist.
     ///
     /// [`ToolEnv::command`]: crate::tool_env::ToolEnv::command
-    pub fn spawn(command: Command) -> Result<Job, JobError> {
+    pub fn spawn(command: Command) -> Result<Process, ProcessError> {
         Self::spawn_with(command, forward_lines)
     }
 
     /// Starts `command` and streams its output as it comes.
     ///
-    /// Like [`Job::spawn`], but it doesn't wait for a line to end: each
-    /// chunk read arrives as a [`JobEvent::Output`], as raw bytes. This is
+    /// Like [`Process::spawn`], but it doesn't wait for a line to end: each
+    /// chunk read arrives as a [`ProcessEvent::Output`], as raw bytes. This is
     /// for output that redraws itself, like progress bars.
     ///
     /// # Errors
     ///
-    /// [`JobError::Spawn`] if the process can't be started, e.g. because the
-    /// program doesn't exist.
-    pub fn spawn_raw(command: Command) -> Result<Job, JobError> {
+    /// [`ProcessError::Spawn`] if the process can't be started, e.g. because
+    /// the program doesn't exist.
+    pub fn spawn_raw(command: Command) -> Result<Process, ProcessError> {
         Self::spawn_with(command, forward_chunks)
     }
 
     /// Starts `command`, with `forward` reading each of its piped streams.
     ///
-    /// A job thread waits for the process, then for the readers, and sends
+    /// An exit thread waits for the process, then for the readers, and sends
     /// `Finished` last. It stops waiting for the readers on Cancel, since a
     /// grandchild may hold the pipes open after the process has exited.
     ///
@@ -150,9 +150,9 @@ impl Job {
     ///
     /// # Errors
     ///
-    /// [`JobError::Spawn`] if the process can't be started.
-    fn spawn_with(mut command: Command, forward: Forward) -> Result<Job, JobError> {
-        let mut child = command.spawn().map_err(|source| JobError::Spawn {
+    /// [`ProcessError::Spawn`] if the process can't be started.
+    fn spawn_with(mut command: Command, forward: Forward) -> Result<Process, ProcessError> {
+        let mut child = command.spawn().map_err(|source| ProcessError::Spawn {
             program: command.get_program().to_string_lossy().into_owned(),
             source,
         })?;
@@ -187,29 +187,30 @@ impl Job {
                     thread::sleep(POLL_INTERVAL);
                 }
             }
-            let _ = sender.send(JobEvent::Finished(outcome));
+            let _ = sender.send(ProcessEvent::Finished(outcome));
         });
 
-        Ok(Job { events, cancelled })
+        Ok(Process { events, cancelled })
     }
 
-    /// Returns the channel the job's events arrive on.
+    /// Returns the channel the process's events arrive on.
     ///
     /// Poll it with `try_recv`, which never blocks.
-    pub fn events(&self) -> &Receiver<JobEvent> {
+    pub fn events(&self) -> &Receiver<ProcessEvent> {
         &self.events
     }
 
     /// Kills the process; `Finished(Cancelled)` follows shortly.
     ///
-    /// Calling it on a job that already finished does nothing.
+    /// Calling it on a process that already finished does nothing.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
 }
 
-/// Cancels the job, so a dropped `Job` never leaves its process running.
-impl Drop for Job {
+/// Cancels the process, so a dropped `Process` never leaves the OS process
+/// running.
+impl Drop for Process {
     fn drop(&mut self) {
         self.cancel();
     }
@@ -221,7 +222,7 @@ impl Drop for Job {
 ///
 /// Its arguments are the stream to read, which one it is, and where to send
 /// the events. The thread ends when the stream closes or nobody listens.
-type Forward = fn(Box<dyn Read + Send>, Stream, Sender<JobEvent>) -> JoinHandle<()>;
+type Forward = fn(Box<dyn Read + Send>, Stream, Sender<ProcessEvent>) -> JoinHandle<()>;
 
 /// Starts a thread that sends each line of `stream` to `sender` as a `Line`.
 ///
@@ -235,7 +236,7 @@ type Forward = fn(Box<dyn Read + Send>, Stream, Sender<JobEvent>) -> JoinHandle<
 fn forward_lines(
     stream: Box<dyn Read + Send>,
     _: Stream,
-    sender: Sender<JobEvent>,
+    sender: Sender<ProcessEvent>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         // `split` instead of `lines`: a byte that isn't UTF-8 becomes `�`
@@ -250,7 +251,7 @@ fn forward_lines(
             if line.ends_with('\r') {
                 line.pop();
             }
-            if sender.send(JobEvent::Line(line)).is_err() {
+            if sender.send(ProcessEvent::Line(line)).is_err() {
                 break;
             }
         }
@@ -269,7 +270,7 @@ fn forward_lines(
 fn forward_chunks(
     mut reader: Box<dyn Read + Send>,
     stream: Stream,
-    sender: Sender<JobEvent>,
+    sender: Sender<ProcessEvent>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0; 4096];
@@ -278,7 +279,7 @@ fn forward_chunks(
                 Ok(0) => break,
                 Ok(read) => {
                     let bytes = buffer[..read].to_vec();
-                    if sender.send(JobEvent::Output { stream, bytes }).is_err() {
+                    if sender.send(ProcessEvent::Output { stream, bytes }).is_err() {
                         break;
                     }
                 }

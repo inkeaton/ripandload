@@ -76,7 +76,7 @@ pub enum Action {
 ///
 /// - `ui`: where the tab is drawn.
 /// - `form`: the form, edited in place as the user types and picks.
-/// - `job_running`: whether a run is going.
+/// - `run_going`: whether a run is going.
 /// - `qobuz_auth_token`: the Qobuz auth token from Settings, for looking up
 ///   Qobuz Previews. When it changes, the URLs without a Preview are looked
 ///   up again.
@@ -88,7 +88,7 @@ pub enum Action {
 pub fn show(
     ui: &mut egui::Ui,
     form: &mut DownloadForm,
-    job_running: bool,
+    run_going: bool,
     qobuz_auth_token: &str,
 ) -> Action {
     ui.label("Paste one or more Qobuz or Deezer URLs, one per line:");
@@ -139,7 +139,7 @@ pub fn show(
     ui.add_space(8.0);
     let mut action = Action::None;
     ui.horizontal(|ui| {
-        let can_download = !job_running && !urls.is_empty() && all_known;
+        let can_download = !run_going && !urls.is_empty() && all_known;
         if ui
             .add_enabled(can_download, egui::Button::new("Download"))
             .clicked()
@@ -147,7 +147,7 @@ pub fn show(
             action = Action::Download;
         }
         if ui
-            .add_enabled(job_running, egui::Button::new("Cancel"))
+            .add_enabled(run_going, egui::Button::new("Cancel"))
             .clicked()
         {
             action = Action::Cancel;

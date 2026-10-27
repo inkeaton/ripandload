@@ -8,8 +8,8 @@
 //! would make a Download or Upload fail, but never stops a save.
 //!
 //! This module doesn't write the Streamrip config and runs nothing. The
-//! Streamrip config is [`streamrip_config`]'s job, and where the tools run
-//! is [`ToolEnv`]'s.
+//! [`streamrip_config`] writes the Streamrip config, and [`ToolEnv`] decides
+//! where the tools run.
 //!
 //! [`streamrip_config`]: crate::streamrip_config
 //! [`ToolEnv`]: crate::tool_env::ToolEnv

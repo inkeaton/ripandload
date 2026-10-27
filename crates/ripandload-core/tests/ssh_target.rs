@@ -19,13 +19,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use ripandload_core::job_run::JobRun;
+use ripandload_core::run::Run;
 use ripandload_core::settings::Server;
 use ripandload_core::tool_env::ToolEnv;
 
 // == Fixtures =================================================================
 
-/// How long a job may run before the test calls it hung.
+/// How long a run may take before the test calls it hung.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Returns the folder `dev/ssh-target.sh` keeps the SSH key and music in.
@@ -49,59 +49,59 @@ fn native() -> ToolEnv {
     ToolEnv::Native { rip: None }
 }
 
-/// Polls `job` the way the GUI does, until it's finished.
+/// Polls `run` the way the GUI does, until it's finished.
 ///
 /// # Arguments
 ///
-/// - `job`: the job, just started.
-/// - `log`: the lines the job logged while starting. Polling appends the
+/// - `run`: the run, just started.
+/// - `log`: the lines the run logged while starting. Polling appends the
 ///   rest.
 ///
 /// # Returns
 ///
-/// The finished job and its whole log.
+/// The finished run and its whole log.
 ///
 /// # Panics
 ///
-/// Panics if the job runs longer than [`TIMEOUT`], showing the log so far.
-fn run_to_end(mut job: JobRun, mut log: Vec<String>) -> (JobRun, Vec<String>) {
+/// Panics if the run takes longer than [`TIMEOUT`], showing the log so far.
+fn run_to_end(mut run: Run, mut log: Vec<String>) -> (Run, Vec<String>) {
     let start = Instant::now();
-    while !job.is_finished() {
-        assert!(start.elapsed() < TIMEOUT, "job hung; log so far: {log:#?}");
-        job.poll(&mut log);
+    while !run.is_finished() {
+        assert!(start.elapsed() < TIMEOUT, "run hung; log so far: {log:#?}");
+        run.poll(&mut log);
         std::thread::sleep(Duration::from_millis(10));
     }
-    (job, log)
+    (run, log)
 }
 
 /// Runs Test connection on `server` to the end.
 ///
 /// # Returns
 ///
-/// The finished job and its whole log.
+/// The finished run and its whole log.
 ///
 /// # Panics
 ///
-/// Panics if the job runs longer than [`TIMEOUT`].
-fn test_connection(server: &Server) -> (JobRun, Vec<String>) {
+/// Panics if the run takes longer than [`TIMEOUT`].
+fn test_connection(server: &Server) -> (Run, Vec<String>) {
     let mut log = Vec::new();
-    let job = JobRun::test_connection(native(), server, &mut log);
-    run_to_end(job, log)
+    let run = Run::test_connection(native(), server, &mut log);
+    run_to_end(run, log)
 }
 
 /// Uploads `staging` to the container's Server, to the end.
 ///
 /// # Returns
 ///
-/// The finished job and its whole log.
+/// The finished run and its whole log.
 ///
 /// # Panics
 ///
-/// Panics if the job runs longer than [`TIMEOUT`].
-fn upload(staging: &Path) -> (JobRun, Vec<String>) {
+/// Panics if the run takes longer than [`TIMEOUT`].
+fn upload(staging: &Path) -> (Run, Vec<String>) {
     let mut log = Vec::new();
-    let job = JobRun::upload(native(), staging, &server(), &mut log);
-    run_to_end(job, log)
+    let run = Run::upload(native(), staging, &server(), &mut log);
+    run_to_end(run, log)
 }
 
 /// Empties the tests' music folder on the Server.
@@ -127,9 +127,9 @@ fn fresh_music_folder() -> PathBuf {
 #[ignore = "needs dev/ssh-target.sh"]
 fn test_connection_succeeds() {
     fresh_music_folder();
-    let (job, log) = test_connection(&server());
-    assert!(job.succeeded(), "{log:#?}");
-    assert_eq!(job.status(), "Test connection: all good");
+    let (run, log) = test_connection(&server());
+    assert!(run.succeeded(), "{log:#?}");
+    assert_eq!(run.status(), "Test connection: all good");
 }
 
 /// A wrong port fails Test connection at the login, saying it can't log in.
@@ -138,8 +138,8 @@ fn test_connection_succeeds() {
 fn test_connection_with_a_wrong_port_says_it_cant_log_in() {
     let mut server = server();
     server.port = 2223;
-    let (job, log) = test_connection(&server);
-    assert!(!job.succeeded());
+    let (run, log) = test_connection(&server);
+    assert!(!run.succeeded());
     let last = log.last().unwrap();
     assert!(
         last.ends_with(
@@ -166,8 +166,8 @@ fn test_connection_with_a_wrong_key_says_it_cant_log_in() {
     let mut server = server();
     server.ssh_key = key;
 
-    let (job, log) = test_connection(&server);
-    assert!(!job.succeeded());
+    let (run, log) = test_connection(&server);
+    assert!(!run.succeeded());
     assert!(
         log.iter().any(|line| line.contains("Permission denied")),
         "{log:#?}"
@@ -181,8 +181,8 @@ fn test_connection_with_a_wrong_key_says_it_cant_log_in() {
 fn test_connection_with_a_missing_folder_says_so() {
     let mut server = server();
     server.music_folder = "/music/does not exist".into();
-    let (job, log) = test_connection(&server);
-    assert!(!job.succeeded());
+    let (run, log) = test_connection(&server);
+    assert!(!run.succeeded());
     assert!(
         log.last()
             .unwrap()
@@ -208,11 +208,11 @@ fn upload_copies_staging_once_and_never_deletes() {
     )
     .unwrap();
 
-    let (job, log) = upload(staging.path());
-    assert!(job.succeeded(), "{log:#?}");
-    assert_eq!(job.status(), "Upload finished");
-    assert!(job.upload_succeeded());
-    assert_eq!(job.to_send(), Some(&[][..]), "everything went");
+    let (run, log) = upload(staging.path());
+    assert!(run.succeeded(), "{log:#?}");
+    assert_eq!(run.status(), "Upload finished");
+    assert!(run.upload_succeeded());
+    assert_eq!(run.to_send(), Some(&[][..]), "everything went");
     assert!(
         log.iter()
             .any(|line| line == "Artist - Album (2024)/01. Song.flac"),
@@ -225,8 +225,8 @@ fn upload_copies_staging_once_and_never_deletes() {
     assert!(music.join("already there.flac").exists());
 
     // A second Upload finds nothing new to send.
-    let (job, log) = upload(staging.path());
-    assert!(job.succeeded(), "{log:#?}");
+    let (run, log) = upload(staging.path());
+    assert!(run.succeeded(), "{log:#?}");
     assert!(!log.iter().any(|line| line.ends_with(".flac")), "{log:#?}");
     assert!(music.join("already there.flac").exists());
 }
@@ -243,19 +243,19 @@ fn compare_lists_only_what_the_server_lacks_and_sends_nothing() {
         fs::write(path, "x").unwrap();
     };
     write("Old - Album (2020)/01. Song.flac");
-    let (job, log) = upload(staging.path());
-    assert!(job.succeeded(), "{log:#?}");
+    let (run, log) = upload(staging.path());
+    assert!(run.succeeded(), "{log:#?}");
 
     write("Björk - Debut (1993)/Disc 1/01. Human Behaviour.flac");
     write("Björk - Debut (1993)/cover.jpg");
     let mut log = Vec::new();
-    let job = JobRun::compare(native(), staging.path(), &server(), &mut log);
-    let (job, log) = run_to_end(job, log);
+    let run = Run::compare(native(), staging.path(), &server(), &mut log);
+    let (run, log) = run_to_end(run, log);
 
-    assert!(job.succeeded(), "{log:#?}");
-    assert_eq!(job.status(), "Compare with Server finished");
+    assert!(run.succeeded(), "{log:#?}");
+    assert_eq!(run.status(), "Compare with Server finished");
     assert_eq!(
-        job.to_send().unwrap(),
+        run.to_send().unwrap(),
         // rsync lists a folder's files before its subfolders.
         [
             PathBuf::from("Björk - Debut (1993)/cover.jpg"),
@@ -275,9 +275,9 @@ fn a_failed_upload_says_nothing_about_the_server() {
     server.port = 2223;
 
     let mut log = Vec::new();
-    let job = JobRun::upload(native(), staging.path(), &server, &mut log);
-    let (job, log) = run_to_end(job, log);
+    let run = Run::upload(native(), staging.path(), &server, &mut log);
+    let (run, log) = run_to_end(run, log);
 
-    assert!(!job.succeeded(), "{log:#?}");
-    assert_eq!(job.to_send(), None);
+    assert!(!run.succeeded(), "{log:#?}");
+    assert_eq!(run.to_send(), None);
 }

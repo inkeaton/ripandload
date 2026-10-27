@@ -9,10 +9,10 @@
 //! - The SSH key is copied into WSL first: [`ToolEnv::ssh_ready`].
 //! - Cancel must also stop the tool inside WSL: [`ToolEnv::cancel_command`].
 //!
-//! This module builds processes but starts none. [`Job`] starts them and
+//! This module builds processes but starts none. [`Process`] starts them and
 //! reads their output.
 //!
-//! [`Job`]: crate::job::Job
+//! [`Process`]: crate::process::Process
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -270,20 +270,20 @@ fn resolve(
 /// `$0` is the tool and `"$@"` its arguments. The script:
 ///
 /// 1. records its pid in `/tmp/ripandload.pid`, for Cancel;
-/// 2. sets `RIPANDLOAD_JOB=1`, which marks the process as the app's;
+/// 2. sets `RIPANDLOAD_PROCESS=1`, which marks the process as the app's;
 /// 3. expands a leading `~/` in the tool's path, since `--exec` skips the
 ///    shell that would;
 /// 4. `exec`s the tool, which keeps the pid, so the recorded one is the
 ///    tool's.
-const WSL_WRAPPER: &str = r#"echo $$ > /tmp/ripandload.pid; export RIPANDLOAD_JOB=1; p=$0; case $p in \~/*) p=$HOME/${p#??};; esac; exec "$p" "$@""#;
+const WSL_WRAPPER: &str = r#"echo $$ > /tmp/ripandload.pid; export RIPANDLOAD_PROCESS=1; p=$0; case $p in \~/*) p=$HOME/${p#??};; esac; exec "$p" "$@""#;
 
 /// The `sh` script that stops the tool [`WSL_WRAPPER`] recorded, for Cancel.
 ///
 /// It sends `TERM` to the recorded process's children (rsync's ssh), then to
 /// the process itself. It does so only if the process is still the app's,
-/// with `RIPANDLOAD_JOB=1` in its environment: a finished tool's pid may
+/// with `RIPANDLOAD_PROCESS=1` in its environment: a finished tool's pid may
 /// belong to anything by now.
-const KILL_RECORDED: &str = r#"pid=$(cat /tmp/ripandload.pid) && grep -qz '^RIPANDLOAD_JOB=1$' /proc/"$pid"/environ && { pkill -TERM -P "$pid"; kill -TERM "$pid"; }"#;
+const KILL_RECORDED: &str = r#"pid=$(cat /tmp/ripandload.pid) && grep -qz '^RIPANDLOAD_PROCESS=1$' /proc/"$pid"/environ && { pkill -TERM -P "$pid"; kill -TERM "$pid"; }"#;
 
 /// Where the SSH key is copied inside WSL.
 ///

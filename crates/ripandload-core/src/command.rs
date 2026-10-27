@@ -5,9 +5,9 @@
 //! arguments and extra environment variables. This module builds those specs
 //! and reads back the few lines of tool output the app acts on.
 //!
-//! This module starts no processes and knows nothing about WSL. Turning a
-//! spec into a real process is [`ToolEnv`]'s job, so the same spec runs
-//! natively and under WSL. Paths in a spec must already be as the tool sees
+//! This module starts no processes and knows nothing about WSL. [`ToolEnv`]
+//! turns a spec into a real process, so the same spec runs natively and
+//! under WSL. Paths in a spec must already be as the tool sees
 //! them: callers convert them with [`ToolEnv::tool_path`] first.
 //!
 //! [`ToolEnv`]: crate::tool_env::ToolEnv
@@ -52,10 +52,10 @@ impl Tool {
 
 /// One command line: a tool, its arguments and extra environment variables.
 ///
-/// Two specs are equal when they run the same command. [`JobRun`] relies on
+/// Two specs are equal when they run the same command. [`Run`] relies on
 /// this to recognize its probe steps, such as [`wsl_check_spec`].
 ///
-/// [`JobRun`]: crate::job_run::JobRun
+/// [`Run`]: crate::run::Run
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
     /// The program to run.
@@ -114,9 +114,9 @@ pub const STREAMRIP_VERSION: &str = "2.2.0";
 
 /// Returns Check tools' commands: `rip --version`, then `rsync --version`.
 ///
-/// Inside WSL, [`JobRun`] runs [`wsl_check_spec`] before these.
+/// Inside WSL, [`Run`] runs [`wsl_check_spec`] before these.
 ///
-/// [`JobRun`]: crate::job_run::JobRun
+/// [`Run`]: crate::run::Run
 pub fn version_specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(Tool::Rip, &["--version"]),

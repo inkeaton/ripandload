@@ -1,4 +1,4 @@
-//! Checks [`Job`] against real processes.
+//! Checks [`Process`] against real processes.
 //!
 //! Most tests run `tests/fixtures/fake-rip.sh`, which prints numbered lines
 //! to stdout at a set pace, one line to stderr, then exits with a set code.
@@ -9,12 +9,12 @@
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use ripandload_core::error::JobError;
-use ripandload_core::job::{Job, JobEvent, Outcome, Stream};
+use ripandload_core::error::ProcessError;
+use ripandload_core::process::{Outcome, Process, ProcessEvent, Stream};
 
 // == Fixtures =================================================================
 
-/// How long a test waits for the next event before it calls the job hung.
+/// How long a test waits for the next event before it calls the process hung.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Returns a command that runs `fake-rip.sh`, with stdout and stderr piped.
@@ -37,24 +37,28 @@ fn fake_rip(lines: u32, delay: f32, exit_code: i32) -> Command {
     command
 }
 
-/// Collects every line `job` sends until `Finished`.
+/// Collects every line `process` sends until `Finished`.
 ///
 /// # Returns
 ///
 /// The lines from stdout and stderr, in the order they arrived, and how the
-/// job ended.
+/// process ended.
 ///
 /// # Panics
 ///
-/// Panics if no event arrives within [`TIMEOUT`], or if `job` sends raw
-/// `Output`, which only [`Job::spawn_raw`] does.
-fn run_to_end(job: &Job) -> (Vec<String>, Outcome) {
+/// Panics if no event arrives within [`TIMEOUT`], or if `process` sends raw
+/// `Output`, which only [`Process::spawn_raw`] does.
+fn run_to_end(process: &Process) -> (Vec<String>, Outcome) {
     let mut lines = Vec::new();
     loop {
-        match job.events().recv_timeout(TIMEOUT).expect("job hung") {
-            JobEvent::Line(line) => lines.push(line),
-            JobEvent::Output { .. } => panic!("Job::spawn sends lines"),
-            JobEvent::Finished(outcome) => return (lines, outcome),
+        match process
+            .events()
+            .recv_timeout(TIMEOUT)
+            .expect("process hung")
+        {
+            ProcessEvent::Line(line) => lines.push(line),
+            ProcessEvent::Output { .. } => panic!("Process::spawn sends lines"),
+            ProcessEvent::Finished(outcome) => return (lines, outcome),
         }
     }
 }
@@ -64,8 +68,8 @@ fn run_to_end(job: &Job) -> (Vec<String>, Outcome) {
 /// A program that doesn't exist is a `Spawn` error naming it.
 #[test]
 fn missing_program_is_a_spawn_error() {
-    let err = Job::spawn(Command::new("/nonexistent/rip")).unwrap_err();
-    assert!(matches!(err, JobError::Spawn { .. }));
+    let err = Process::spawn(Command::new("/nonexistent/rip")).unwrap_err();
+    assert!(matches!(err, ProcessError::Spawn { .. }));
     assert_eq!(err.to_string(), "couldn't start /nonexistent/rip");
 }
 
@@ -74,8 +78,8 @@ fn missing_program_is_a_spawn_error() {
 /// Lines from stdout and stderr arrive in order, then `Succeeded`.
 #[test]
 fn lines_arrive_in_order_then_success() {
-    let job = Job::spawn(fake_rip(5, 0.01, 0)).unwrap();
-    let (lines, outcome) = run_to_end(&job);
+    let process = Process::spawn(fake_rip(5, 0.01, 0)).unwrap();
+    let (lines, outcome) = run_to_end(&process);
 
     let stdout: Vec<&str> = lines
         .iter()
@@ -93,8 +97,8 @@ fn lines_arrive_in_order_then_success() {
 /// A failing process reports its exit code.
 #[test]
 fn exit_code_is_reported() {
-    let job = Job::spawn(fake_rip(1, 0.0, 3)).unwrap();
-    let (_, outcome) = run_to_end(&job);
+    let process = Process::spawn(fake_rip(1, 0.0, 3)).unwrap();
+    let (_, outcome) = run_to_end(&process);
     assert_eq!(outcome, Outcome::Failed { code: Some(3) });
 }
 
@@ -113,41 +117,50 @@ fn raw_output_arrives_without_waiting_for_a_newline_and_says_which_stream() {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let job = Job::spawn_raw(command).unwrap();
+    let process = Process::spawn_raw(command).unwrap();
 
-    let next = || job.events().recv_timeout(TIMEOUT).expect("job hung");
-    let output = |stream, bytes: &[u8]| JobEvent::Output {
+    let next = || {
+        process
+            .events()
+            .recv_timeout(TIMEOUT)
+            .expect("process hung")
+    };
+    let output = |stream, bytes: &[u8]| ProcessEvent::Output {
         stream,
         bytes: bytes.to_vec(),
     };
     assert_eq!(next(), output(Stream::Stdout, b"10%"));
     assert_eq!(next(), output(Stream::Stderr, b"oops"));
     assert_eq!(next(), output(Stream::Stdout, b"\r20%"));
-    job.cancel();
+    process.cancel();
 }
 
 // == Cancel ===================================================================
 
-/// Cancel kills the process and ends the job with `Cancelled`.
+/// Cancel kills the process, which ends with `Cancelled`.
 #[test]
-fn cancel_stops_the_job() {
-    let job = Job::spawn(fake_rip(100, 0.05, 0)).unwrap();
-    match job.events().recv_timeout(TIMEOUT).expect("no first line") {
-        JobEvent::Line(line) => assert_eq!(line, "line 1"),
+fn cancel_stops_the_process() {
+    let process = Process::spawn(fake_rip(100, 0.05, 0)).unwrap();
+    match process
+        .events()
+        .recv_timeout(TIMEOUT)
+        .expect("no first line")
+    {
+        ProcessEvent::Line(line) => assert_eq!(line, "line 1"),
         other => panic!("expected a line, got {other:?}"),
     }
 
-    job.cancel();
-    let (lines, outcome) = run_to_end(&job);
+    process.cancel();
+    let (lines, outcome) = run_to_end(&process);
     assert_eq!(outcome, Outcome::Cancelled);
     assert!(
         lines.len() < 99,
-        "job kept running: {} more lines",
+        "process kept running: {} more lines",
         lines.len()
     );
 }
 
-/// Cancel still ends the job when a grandchild holds its output open.
+/// Cancel still ends the process when a grandchild holds its output open.
 #[test]
 fn cancel_works_while_a_grandchild_holds_the_output_open() {
     // `sh` exits at once, but the background `sleep` keeps stdout open.
@@ -157,13 +170,13 @@ fn cancel_works_while_a_grandchild_holds_the_output_open() {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let job = Job::spawn(command).unwrap();
+    let process = Process::spawn(command).unwrap();
     assert_eq!(
-        job.events().recv_timeout(TIMEOUT).unwrap(),
-        JobEvent::Line("started".into())
+        process.events().recv_timeout(TIMEOUT).unwrap(),
+        ProcessEvent::Line("started".into())
     );
 
-    job.cancel();
-    let (_, outcome) = run_to_end(&job);
+    process.cancel();
+    let (_, outcome) = run_to_end(&process);
     assert_eq!(outcome, Outcome::Cancelled);
 }

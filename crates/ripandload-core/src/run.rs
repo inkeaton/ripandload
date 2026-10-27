@@ -1,8 +1,8 @@
 //! The app's runs of tools: Check tools, a Download, an Upload, Compare with
 //! Server and Test connection.
 //!
-//! A [`JobRun`] is one of these: a queue of [`CommandSpec`]s run one after
-//! another, each as a [`Job`]. It writes each command line and the output
+//! A [`Run`] is one of these: a queue of [`CommandSpec`]s run one after
+//! another, each as a [`Process`]. It writes each command line and the output
 //! into the log, counts the problems, and turns a failed command into a
 //! message that says what to check. The app polls it each frame; nothing
 //! here blocks.
@@ -32,8 +32,8 @@ use std::sync::mpsc::TryRecvError;
 
 use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
 use crate::error::{ToolError, error_chain};
-use crate::job::{Job, JobEvent, Outcome, Stream};
 use crate::live_output::LiveOutput;
+use crate::process::{Outcome, Process, ProcessEvent, Stream};
 use crate::settings::Server;
 use crate::tool_env::ToolEnv;
 
@@ -43,24 +43,24 @@ const SSH_FAILED: i32 = 255;
 /// The shell's exit code when the program doesn't exist (inside WSL).
 const SHELL_NOT_FOUND: i32 = 127;
 
-// == Job runs =================================================================
+// == Runs =====================================================================
 
 /// One run of Check tools, a Download, an Upload, Compare with Server or
 /// Test connection.
 ///
 /// It's started by the constructor for its kind, then driven by
-/// [`JobRun::poll`] until [`JobRun::is_finished`]. A run whose first command
+/// [`Run::poll`] until [`Run::is_finished`]. A run whose first command
 /// can't start is already finished when the constructor returns, with the
 /// problem in the log.
-pub struct JobRun {
-    /// Which run this is, which decides its status line and its messages.
+pub struct Run {
+    /// Which run this is, which decides its status bar text and its messages.
     kind: Kind,
     /// Where the tools run, natively or inside WSL.
     tool_env: ToolEnv,
     /// The commands still to run, next first.
     queue: VecDeque<CommandSpec>,
-    /// The command running now and its job; `None` once the run is over.
-    current: Option<(CommandSpec, Job)>,
+    /// The command running now and its process; `None` once the run is over.
+    current: Option<(CommandSpec, Process)>,
     /// The version `rip --version` printed, if the current step is that.
     rip_version: Option<String>,
     /// For Compare with Server: the files an Upload would send, relative to
@@ -70,11 +70,11 @@ pub struct JobRun {
     live: Option<RipOutput>,
     /// How many problems were logged so far.
     problems: usize,
-    /// Whether [`JobRun::cancel`] was called.
+    /// Whether [`Run::cancel`] was called.
     cancelled: bool,
 }
 
-impl JobRun {
+impl Run {
     // == Starting a run =======================================================
 
     /// Starts Check tools: `rip --version`, then `rsync --version`.
@@ -139,8 +139,8 @@ impl JobRun {
     /// Starts Compare with Server: the Upload as a dry run.
     ///
     /// It finds out which files the Server doesn't have yet, from
-    /// [`command::compare_spec`]'s output; see [`JobRun::to_send`]. Like
-    /// [`JobRun::upload`], it copies the SSH key into WSL first if the tools
+    /// [`command::compare_spec`]'s output; see [`Run::to_send`]. Like
+    /// [`Run::upload`], it copies the SSH key into WSL first if the tools
     /// run there.
     ///
     /// # Arguments
@@ -167,7 +167,7 @@ impl JobRun {
     /// Starts Test connection: the ssh checks on `server`.
     ///
     /// The checks are [`command::test_connection_specs`]. Like
-    /// [`JobRun::upload`], it copies the SSH key into WSL first if the tools
+    /// [`Run::upload`], it copies the SSH key into WSL first if the tools
     /// run there.
     ///
     /// # Arguments
@@ -229,18 +229,18 @@ impl JobRun {
     /// When the current command has finished, it logs how it ended and
     /// starts the next one, so one poll may cover several commands.
     pub fn poll(&mut self, log: &mut Vec<String>) {
-        while let Some((_, job)) = &self.current {
-            let event = match job.events().try_recv() {
+        while let Some((_, process)) = &self.current {
+            let event = match process.events().try_recv() {
                 Ok(event) => event,
                 Err(TryRecvError::Empty) => break,
-                // The job thread died without saying how it ended.
+                // The exit thread died without saying how it ended.
                 Err(TryRecvError::Disconnected) => {
-                    JobEvent::Finished(Outcome::Failed { code: None })
+                    ProcessEvent::Finished(Outcome::Failed { code: None })
                 }
             };
             match event {
-                JobEvent::Line(line) => self.on_line(line, log),
-                JobEvent::Output { stream, bytes } => {
+                ProcessEvent::Line(line) => self.on_line(line, log),
+                ProcessEvent::Output { stream, bytes } => {
                     let lines = self
                         .live
                         .as_mut()
@@ -249,7 +249,7 @@ impl JobRun {
                         self.on_line(line, log);
                     }
                 }
-                JobEvent::Finished(outcome) => {
+                ProcessEvent::Finished(outcome) => {
                     if let Some(live) = self.live.take() {
                         for mut output in [live.stdout, live.stderr] {
                             for line in output.finish() {
@@ -278,8 +278,8 @@ impl JobRun {
     pub fn cancel(&mut self, log: &mut Vec<String>) {
         self.cancelled = true;
         self.queue.clear();
-        if let Some((_, job)) = &self.current {
-            job.cancel();
+        if let Some((_, process)) = &self.current {
+            process.cancel();
             if let Some(mut kill) = self.tool_env.cancel_command()
                 && let Err(err) = kill.spawn()
             {
@@ -343,7 +343,7 @@ impl JobRun {
             .unwrap_or_default()
     }
 
-    /// Returns the status line: what runs now, or how the run ended.
+    /// Returns the status bar's text: what runs now, or how the run ended.
     ///
     /// # Returns
     ///
@@ -381,16 +381,20 @@ impl JobRun {
             // A Download's progress bars redraw themselves, so it's read as
             // it comes.
             let raw = self.kind == Kind::Download && spec.program == Tool::Rip;
-            let spawn = if raw { Job::spawn_raw } else { Job::spawn };
-            let job = self
+            let spawn = if raw {
+                Process::spawn_raw
+            } else {
+                Process::spawn
+            };
+            let process = self
                 .tool_env
                 .command(&spec)
                 .map_err(|err| error_chain(&err))
                 .and_then(|command| spawn(command).map_err(|err| error_chain(&err)));
-            match job {
-                Ok(job) => {
+            match process {
+                Ok(process) => {
                     self.live = raw.then(RipOutput::default);
-                    self.current = Some((spec, job));
+                    self.current = Some((spec, process));
                     return;
                 }
                 Err(message) if self.tool_env.is_wsl() => self.problem(
@@ -456,9 +460,9 @@ impl JobRun {
     /// then starts the next command.
     ///
     /// - Success logs nothing, except after Check tools' `rip --version`,
-    ///   which goes on to [`JobRun::check_rip_version`].
+    ///   which goes on to [`Run::check_rip_version`].
     /// - A failure with an exit code is a problem, with a hint from
-    ///   [`JobRun::failure_message`]. When the WSL check fails, nothing else
+    ///   [`Run::failure_message`]. When the WSL check fails, nothing else
     ///   runs. When Check tools finds no `rip` inside WSL, the pyenv probe
     ///   runs next.
     /// - A failure without an exit code is a problem too.
@@ -568,7 +572,7 @@ impl JobRun {
 
 // == Internal types ===========================================================
 
-/// Which run a [`JobRun`] is.
+/// Which run a [`Run`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     /// Check tools.
@@ -584,7 +588,7 @@ enum Kind {
 }
 
 impl Kind {
-    /// Returns the run's name, as the status line shows it.
+    /// Returns the run's name, as the status bar shows it.
     fn name(self) -> &'static str {
         match self {
             Kind::CheckTools => "Check tools",

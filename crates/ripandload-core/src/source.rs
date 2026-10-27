@@ -5,9 +5,8 @@
 //! [`quality_choices`] works out which of them a Download that mixes Sources
 //! can still offer.
 //!
-//! This module doesn't look inside a URL's path. Finding out whether it
-//! names an album, a track or a playlist is the Preview's job, in
-//! [`preview`].
+//! This module doesn't look inside a URL's path. The Preview, in
+//! [`preview`], finds out whether it names an album, a track or a playlist.
 //!
 //! [`preview`]: crate::preview
 

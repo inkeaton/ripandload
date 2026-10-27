@@ -1,7 +1,7 @@
 //! The app's window, which holds the tabs and runs what they ask for.
 //!
 //! [`RipAndLoadApp`] is the whole GUI state. Each frame it polls the current
-//! [`JobRun`], then draws the tab bar, the status bar, the log, rip's
+//! [`Run`], then draws the tab bar, the status bar, the log, rip's
 //! progress bars while a Download shows them, and the open tab. The
 //! Download and Upload tabs only report what the user clicked, as an
 //! `Action`, and the Settings tab's buttons are drawn here. Either way this
@@ -13,8 +13,8 @@
 //! folder, and quitting with unsaved Settings.
 //!
 //! The tabs' own widgets are in [`download_tab`], [`upload_tab`] and
-//! [`settings_tab`]. Building command lines, running tools and reading the
-//! Staging folder are `ripandload_core`'s job.
+//! [`settings_tab`]. `ripandload_core` builds the command lines, runs the
+//! tools and reads the Staging folder.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,7 +22,7 @@ use std::time::Duration;
 use eframe::egui;
 use ripandload_core::command;
 use ripandload_core::error::error_chain;
-use ripandload_core::job_run::JobRun;
+use ripandload_core::run::Run;
 use ripandload_core::settings::{Server, Settings};
 use ripandload_core::staging::{self, Comparison, StagingContents};
 use ripandload_core::streamrip_config::{self, Seeded};
@@ -34,7 +34,7 @@ use crate::upload_tab::{self, StagingScan};
 use crate::wording::plural;
 
 /// How often the window repaints while a run is going, to show new output.
-const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const RUN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// The status for a run that needs a Server when no active one is set.
 const NO_SERVER: &str = "No Server configured.";
@@ -53,7 +53,7 @@ pub struct RipAndLoadApp {
     /// The status bar's text; empty shows `Idle`.
     status: String,
     /// The current or last run. Only one runs at a time.
-    job: Option<JobRun>,
+    run: Option<Run>,
     /// The Download tab's form: pasted URLs, their Previews and the Quality.
     download: DownloadForm,
     /// What's in the Staging folder, as the Upload tab last read it.
@@ -109,7 +109,7 @@ impl RipAndLoadApp {
             tab: Tab::default(),
             log: Vec::new(),
             status,
-            job: None,
+            run: None,
             download: DownloadForm::default(),
             staging_scan: StagingScan::default(),
             comparison: None,
@@ -128,8 +128,8 @@ impl RipAndLoadApp {
     /// Starts Check tools, with a cleared log.
     fn check_tools(&mut self) {
         self.log.clear();
-        let job = JobRun::check_tools(ToolEnv::from_settings(&self.settings), &mut self.log);
-        self.start_job(job);
+        let run = Run::check_tools(ToolEnv::from_settings(&self.settings), &mut self.log);
+        self.start_run(run);
     }
 
     /// Writes the Streamrip config, then starts a Download of the form's URLs.
@@ -185,8 +185,8 @@ impl RipAndLoadApp {
         };
         self.log.clear();
         let spec = command::download_spec(&config, &self.download.urls(), self.download.quality);
-        let job = JobRun::download(tool_env, spec, &mut self.log);
-        self.start_job(job);
+        let run = Run::download(tool_env, spec, &mut self.log);
+        self.start_run(run);
     }
 
     /// Starts an Upload of the Staging folder to the active Server.
@@ -199,13 +199,13 @@ impl RipAndLoadApp {
         };
         self.log.clear();
         self.staging_at_start = Some(read_staging_at_start(&self.settings.staging_folder));
-        let job = JobRun::upload(
+        let run = Run::upload(
             ToolEnv::from_settings(&self.settings),
             &self.settings.staging_folder,
             server,
             &mut self.log,
         );
-        self.start_job(job);
+        self.start_run(run);
     }
 
     /// Starts Test connection against the active Server.
@@ -222,12 +222,12 @@ impl RipAndLoadApp {
             return;
         }
         self.log.clear();
-        let job = JobRun::test_connection(
+        let run = Run::test_connection(
             ToolEnv::from_settings(&self.settings),
             server,
             &mut self.log,
         );
-        self.start_job(job);
+        self.start_run(run);
     }
 
     /// Starts Compare with Server, which lists what an Upload would send.
@@ -240,61 +240,61 @@ impl RipAndLoadApp {
         };
         self.log.clear();
         self.staging_at_start = Some(read_staging_at_start(&self.settings.staging_folder));
-        let job = JobRun::compare(
+        let run = Run::compare(
             ToolEnv::from_settings(&self.settings),
             &self.settings.staging_folder,
             server,
             &mut self.log,
         );
-        self.start_job(job);
+        self.start_run(run);
     }
 
-    /// Makes `job` the current run, finishing it at once if it couldn't start.
-    fn start_job(&mut self, job: JobRun) {
-        self.status = job.status();
-        let finished = job.is_finished();
-        self.job = Some(job);
-        // `poll_job` skips a finished run, so it would never see this one
+    /// Makes `run` the current run, finishing it at once if it couldn't start.
+    fn start_run(&mut self, run: Run) {
+        self.status = run.status();
+        let finished = run.is_finished();
+        self.run = Some(run);
+        // `poll_run` skips a finished run, so it would never see this one
         // end.
         if finished {
-            self.job_finished();
+            self.run_finished();
         }
     }
 
     // == Following a run ======================================================
 
     /// Returns whether a run is going and hasn't finished.
-    fn job_running(&self) -> bool {
-        self.job.as_ref().is_some_and(|job| !job.is_finished())
+    fn run_going(&self) -> bool {
+        self.run.as_ref().is_some_and(|run| !run.is_finished())
     }
 
     /// Asks the current run to cancel, if there is one.
-    fn cancel_job(&mut self) {
-        if let Some(job) = &mut self.job {
-            job.cancel(&mut self.log);
+    fn cancel_run(&mut self) {
+        if let Some(run) = &mut self.run {
+            run.cancel(&mut self.log);
         }
     }
 
     /// Moves the current run's new output into the log and the status bar.
     ///
     /// While the run goes on, it asks `ctx` for a repaint after
-    /// [`JOB_POLL_INTERVAL`], since the run's threads can't wake the UI by
+    /// [`RUN_POLL_INTERVAL`], since the run's threads can't wake the UI by
     /// themselves. When the run has just ended, it calls
-    /// [`RipAndLoadApp::job_finished`].
-    fn poll_job(&mut self, ctx: &egui::Context) {
-        let Some(job) = &mut self.job else {
+    /// [`RipAndLoadApp::run_finished`].
+    fn poll_run(&mut self, ctx: &egui::Context) {
+        let Some(run) = &mut self.run else {
             return;
         };
-        if job.is_finished() {
+        if run.is_finished() {
             return;
         }
-        job.poll(&mut self.log);
-        self.status = job.status();
-        if !job.is_finished() {
-            ctx.request_repaint_after(JOB_POLL_INTERVAL);
+        run.poll(&mut self.log);
+        self.status = run.status();
+        if !run.is_finished() {
+            ctx.request_repaint_after(RUN_POLL_INTERVAL);
             return;
         }
-        self.job_finished();
+        self.run_finished();
     }
 
     /// Catches the app up with a run that has just ended.
@@ -304,24 +304,24 @@ impl RipAndLoadApp {
     /// from what the run found out, if anything, and after a successful Upload
     /// offers to clear the Staging folder, if Settings say to. If the Staging
     /// folder can't be read for the Comparison, the status bar says why.
-    fn job_finished(&mut self) {
+    fn run_finished(&mut self) {
         // Downloads and Uploads change what's in the Staging folder.
         self.staging_scan.invalidate();
-        let Some(job) = &self.job else {
+        let Some(run) = &self.run else {
             return;
         };
-        if job.is_download() {
+        if run.is_download() {
             self.download.retry_previews();
         }
         let folder = &self.settings.staging_folder;
         let at_start = self.staging_at_start.take();
-        if let (Some(to_send), Some(at_start)) = (job.to_send(), at_start) {
+        if let (Some(to_send), Some(at_start)) = (run.to_send(), at_start) {
             match at_start {
                 Ok(contents) => self.comparison = Some(Comparison::new(folder, &contents, to_send)),
                 Err(why) => self.status = why,
             }
         }
-        if job.upload_succeeded() && self.settings.offer_clear_after_upload {
+        if run.upload_succeeded() && self.settings.offer_clear_after_upload {
             self.ask_to_clear(true);
         }
     }
@@ -466,7 +466,7 @@ impl RipAndLoadApp {
             }
             ui.separator();
             if ui
-                .add_enabled(!self.job_running(), egui::Button::new("Check tools"))
+                .add_enabled(!self.run_going(), egui::Button::new("Check tools"))
                 .on_hover_text("Runs rip --version and rsync --version")
                 .clicked()
             {
@@ -476,7 +476,7 @@ impl RipAndLoadApp {
             let server_ready = self.settings.active_server().is_some() && missing.is_none();
             let mut test = ui
                 .add_enabled(
-                    !self.job_running() && server_ready,
+                    !self.run_going() && server_ready,
                     egui::Button::new("Test connection"),
                 )
                 .on_hover_text(
@@ -553,7 +553,7 @@ impl RipAndLoadApp {
 impl eframe::App for RipAndLoadApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.poll_job(&ctx);
+        self.poll_run(&ctx);
 
         // Panels claim space from the outside in: the edges go first, and
         // the central panel, added last, takes whatever is left.
@@ -567,10 +567,10 @@ impl eframe::App for RipAndLoadApp {
 
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                if self.job_running() {
+                if self.run_going() {
                     ui.spinner();
                     if ui.button("Cancel").clicked() {
-                        self.cancel_job();
+                        self.cancel_run();
                     }
                 }
                 let status = if self.status.is_empty() {
@@ -599,7 +599,7 @@ impl eframe::App for RipAndLoadApp {
 
         // rip's progress bars, added after the log so they sit between it
         // and the tab.
-        let live_rows = self.job.as_ref().map(JobRun::live_rows).unwrap_or_default();
+        let live_rows = self.run.as_ref().map(Run::live_rows).unwrap_or_default();
         if !live_rows.is_empty() {
             egui::Panel::bottom("live").show(ui, |ui| {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -612,31 +612,31 @@ impl eframe::App for RipAndLoadApp {
 
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Download => {
-                let running = self.job_running();
+                let run_going = self.run_going();
                 match download_tab::show(
                     ui,
                     &mut self.download,
-                    running,
+                    run_going,
                     &self.settings.qobuz.auth_token,
                 ) {
                     download_tab::Action::Download => self.download(),
-                    download_tab::Action::Cancel => self.cancel_job(),
+                    download_tab::Action::Cancel => self.cancel_run(),
                     download_tab::Action::None => {}
                 }
             }
             Tab::Upload => {
-                let running = self.job_running();
+                let run_going = self.run_going();
                 match upload_tab::show(
                     ui,
                     self.settings.active_server(),
                     &self.settings.staging_folder,
                     &mut self.staging_scan,
                     self.comparison.as_ref(),
-                    running,
+                    run_going,
                 ) {
                     upload_tab::Action::Upload => self.upload(),
                     upload_tab::Action::Compare => self.compare(),
-                    upload_tab::Action::Cancel => self.cancel_job(),
+                    upload_tab::Action::Cancel => self.cancel_run(),
                     upload_tab::Action::Clear => self.ask_to_clear(false),
                     upload_tab::Action::None => {}
                 }

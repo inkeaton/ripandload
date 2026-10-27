@@ -1,6 +1,6 @@
 # 11 – `job` names become Run and Process
 
-Status: ready-for-agent
+Status: done
 Blocked by: none
 
 Part of `../spec.md`. Decided in `../../architecture/issues/01-glossary-and-run-naming.md`: the glossary calls one Check tools, Download, Upload, Compare with Server or Test connection a **Run**, and lists "job" under _Avoid_. A mechanical rename; no behavior changes.
@@ -16,8 +16,10 @@ Part of `../spec.md`. Decided in `../../architecture/issues/01-glossary-and-run-
 
 ## Acceptance
 
-- [ ] `rg -i '\bjob|job_|_job|JobRun|JOB'` over `crates/` and `dev/` finds nothing (or only a justified leftover noted under Comments).
-- [ ] `dev/check.sh` passes.
-- [ ] One commit.
+- [x] `rg -i '\bjob|job_|_job|JobRun|JOB'` over `crates/` and `dev/` finds nothing (or only a justified leftover noted under Comments).
+- [x] `dev/check.sh` passes.
+- [x] One commit.
 
 ## Comments
+
+The `rg` check also caught the English idiom "X's job" in doc prose. Those sentences now name who does the work ("[`ToolEnv`] turns a spec into a real process"). `docs/style/comments-rust.md:296` keeps the idiom in a style example; it's outside `crates/` and `dev/` and names no identifier. The thread in `Process` that waits for the exit is now called "the exit thread" everywhere. The `#[ignore]`d SSH-target tests need `dev/ssh-target.sh`'s container, so they were renamed but not run here. A tool still running from an older build carries `RIPANDLOAD_JOB`, so Cancel from the new build won't find it; nothing persists across builds, so this only matters mid-upgrade.

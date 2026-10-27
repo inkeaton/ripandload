@@ -13,19 +13,19 @@
 //! # Modules
 //!
 //! - Settings: [`settings`], [`streamrip_config`] and [`source`].
-//! - Running tools: [`command`], [`tool_env`], [`wsl_path`], [`job`] and
-//!   [`job_run`].
+//! - Running tools: [`command`], [`tool_env`], [`wsl_path`], [`process`] and
+//!   [`run`].
 //! - Reading their output: [`live_output`] and [`wsl_output`].
 //! - Music: [`staging`] for the Staging folder, and [`preview`].
 //! - Problems: [`error`] and [`log_file`].
 
 pub mod command;
 pub mod error;
-pub mod job;
-pub mod job_run;
 pub mod live_output;
 pub mod log_file;
 pub mod preview;
+pub mod process;
+pub mod run;
 pub mod settings;
 pub mod source;
 pub mod staging;

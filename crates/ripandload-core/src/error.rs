@@ -2,9 +2,9 @@
 //!
 //! Each enum says why one kind of operation failed: loading Settings,
 //! running a tool, rendering the Streamrip config, and so on. Their messages
-//! are written for the status line: what went wrong and, where it helps,
+//! are written for the status bar: what went wrong and, where it helps,
 //! what the user can do about it. [`error_chain`] joins an error and its
-//! causes into the one line that the status line and the log file show.
+//! causes into the one line that the status bar and the log file show.
 //!
 //! This module doesn't show errors anywhere. The GUI decides where each one
 //! goes.
@@ -108,17 +108,17 @@ pub enum ToolError {
     },
 }
 
-// == Jobs =====================================================================
+// == Processes ================================================================
 
-/// Why a [`Job`] couldn't start its process.
+/// Why a [`Process`] couldn't start.
 ///
-/// Returned by [`Job::spawn`] and [`Job::spawn_raw`].
+/// Returned by [`Process::spawn`] and [`Process::spawn_raw`].
 ///
-/// [`Job`]: crate::job::Job
-/// [`Job::spawn`]: crate::job::Job::spawn
-/// [`Job::spawn_raw`]: crate::job::Job::spawn_raw
+/// [`Process`]: crate::process::Process
+/// [`Process::spawn`]: crate::process::Process::spawn
+/// [`Process::spawn_raw`]: crate::process::Process::spawn_raw
 #[derive(Debug, thiserror::Error)]
-pub enum JobError {
+pub enum ProcessError {
     /// The OS refused to start the process.
     #[error("couldn't start {program}")]
     Spawn {
@@ -314,8 +314,8 @@ pub enum PreviewError {
 
 /// Returns `err` and its causes on one line: `outer: cause: inner cause`.
 ///
-/// `Display` shows only the outer message, so the status line and the log
-/// file use this instead. Each message is cleaned up for the status line:
+/// `Display` shows only the outer message, so the status bar and the log
+/// file use this instead. Each message is cleaned up for the status bar:
 /// OS error codes, trailing full stops and the code snippet of a TOML error
 /// are dropped.
 ///
@@ -335,7 +335,7 @@ pub fn error_chain(err: &dyn std::error::Error) -> String {
 
 // == Message cleanup ==========================================================
 
-/// Returns `err`'s own message on one line, cleaned up for the status line.
+/// Returns `err`'s own message on one line, cleaned up for the status bar.
 ///
 /// Drops the ` (os error 13)` that `io::Error` adds, the lines of a TOML
 /// error's code snippet, and a trailing full stop, which Windows messages end

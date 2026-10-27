@@ -5,10 +5,10 @@
 //! that ignore `WSL_UTF8`. Both can arrive on the same stream, so each line
 //! is decoded on its own (ADR 0001, in `docs/adr/`).
 //!
-//! This module only decodes bytes. Splitting output into lines is [`Job`]'s
-//! job, and replaying progress bars is [`LiveOutput`]'s.
+//! This module only decodes bytes. [`Process`] splits output into lines, and
+//! [`LiveOutput`] replays progress bars.
 //!
-//! [`Job`]: crate::job::Job
+//! [`Process`]: crate::process::Process
 //! [`LiveOutput`]: crate::live_output::LiveOutput
 
 // == Decoding =================================================================
@@ -21,10 +21,10 @@
 ///
 /// # Arguments
 ///
-/// - `bytes`: one line of output, as [`Job`] splits it on `b'\n'`, or a
+/// - `bytes`: one line of output, as [`Process`] splits it on `b'\n'`, or a
 ///   whole output.
 ///
-/// [`Job`]: crate::job::Job
+/// [`Process`]: crate::process::Process
 pub fn decode_tool_output(bytes: &[u8]) -> String {
     if cfg!(windows) {
         decode_wsl_output(bytes)
@@ -40,11 +40,11 @@ pub fn decode_tool_output(bytes: &[u8]) -> String {
 ///
 /// # Arguments
 ///
-/// - `bytes`: one line of output, as [`Job`] splits it on `b'\n'`, or a
+/// - `bytes`: one line of output, as [`Process`] splits it on `b'\n'`, or a
 ///   whole output. A UTF-16LE line after the first starts with the NUL that
 ///   was the second half of the previous line's `\n`; that NUL is dropped.
 ///
-/// [`Job`]: crate::job::Job
+/// [`Process`]: crate::process::Process
 pub fn decode_wsl_output(bytes: &[u8]) -> String {
     let bytes = if bytes.first() == Some(&0) && bytes.len() % 2 == 1 {
         &bytes[1..]
