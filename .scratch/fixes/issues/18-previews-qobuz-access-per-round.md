@@ -1,6 +1,6 @@
 # 18 – Previews read the Qobuz `app_id` once per round
 
-Status: ready-for-agent
+Status: ready-for-human
 Blocked by: 17
 
 Part of `../spec.md`. Designed in `../../architecture/issues/06-preview-lookup-inputs.md` (see its Answer). Blocked by 17 because both touch `app.rs`; `Places` comes from fix 13.
@@ -15,8 +15,15 @@ Part of `../spec.md`. Designed in `../../architecture/issues/06-preview-lookup-i
 
 ## Acceptance
 
-- [ ] Unit tests in `download_tab.rs`: `state_of`'s mapping; with an injected `read_app_id` counting its calls, one read per round however many Qobuz URLs, and a new read after `retry()`. `answers_from_the_old_round_are_dropped` still passes.
-- [ ] `dev/check.sh` passes; by hand: Qobuz and Deezer Previews appear; after a first Download, a Qobuz URL that said "no app_id" gets its Preview.
-- [ ] One commit.
+- [x] Unit tests in `download_tab.rs`: `state_of`'s mapping; with an injected `read_app_id` counting its calls, one read per round however many Qobuz URLs, and a new read after `retry()`. `answers_from_the_old_round_are_dropped` still passes.
+- [ ] `dev/check.sh` passes (done); by hand: Qobuz and Deezer Previews appear; after a first Download, a Qobuz URL that said "no app_id" gets its Preview.
+- [x] One commit.
 
 ## Comments
+
+2026-10-27, implementation:
+
+- `Previews::qobuz_access` is built at the round's first lookup of any Source, so a Deezer-only paste also reads the Streamrip config once per round (before, only Qobuz URLs read it). This follows "the first time the round has a URL to look up"; a corrupt config's warning can now show for a Deezer-only paste.
+- Every failed lookup is still logged at debug, `NoQobuzAppId` and `NoQobuzToken` included, as before. The lookup thread does the logging, with the URL, so `state_of` stays pure.
+- The tests start real lookup threads, but a Qobuz URL with no `app_id` fails in `preview::fetch` before any request, so they stay offline.
+- Still to do by hand: Qobuz and Deezer Previews appear; after a first Download, a Qobuz URL that said "no preview until the first Qobuz Download" gets its Preview.

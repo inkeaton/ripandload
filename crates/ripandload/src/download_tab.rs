@@ -13,6 +13,7 @@
 //! [`RipAndLoadApp`]: crate::app::RipAndLoadApp
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -80,6 +81,9 @@ pub enum Action {
 /// - `qobuz_auth_token`: the Qobuz auth token from Settings, for looking up
 ///   Qobuz Previews. When it changes, the URLs without a Preview are looked
 ///   up again.
+/// - `streamrip_config`: the Streamrip config's path, where Qobuz Previews
+///   read the `app_id`; `None` when there is none, and Qobuz Previews then
+///   say so.
 ///
 /// # Returns
 ///
@@ -90,6 +94,7 @@ pub fn show(
     form: &mut DownloadForm,
     run_going: bool,
     qobuz_auth_token: &str,
+    streamrip_config: Option<&Path>,
 ) -> Action {
     ui.label("Paste one or more Qobuz or Deezer URLs, one per line:");
     let pasted = ui.add(
@@ -111,8 +116,13 @@ pub fn show(
         .filter(|(_, source)| source.is_some())
         .map(|(url, _)| *url)
         .collect();
-    form.previews
-        .update(ui.ctx(), &known, pasted.changed(), qobuz_auth_token);
+    form.previews.update(
+        ui.ctx(),
+        &known,
+        pasted.changed(),
+        qobuz_auth_token,
+        streamrip_config,
+    );
 
     for (url, source) in &urls {
         match source {
@@ -166,7 +176,9 @@ const SETTLE_TIME: Duration = Duration::from_millis(500);
 /// The Preview of each distinct URL pasted, kept for the session.
 ///
 /// Each lookup runs on a thread of its own and sends its answer back over a
-/// channel, which [`Previews::update`] empties every frame.
+/// channel, which [`Previews::update`] empties every frame. The Qobuz
+/// `app_id` is read once per lookup round, on the UI thread, at the round's
+/// first lookup of any Source, and every lookup of the round gets a copy.
 #[derive(Debug)]
 struct Previews {
     /// Every URL asked about so far: `URL -> its lookup's state`.
@@ -180,6 +192,12 @@ struct Previews {
     round: u64,
     /// The Qobuz auth token the current answers were looked up with.
     qobuz_auth_token: String,
+    /// What the current round's lookups send to Qobuz; `None` until the
+    /// round has a URL to look up.
+    qobuz_access: Option<QobuzAccess>,
+    /// Reads the Qobuz `app_id` from the Streamrip config at a path:
+    /// [`streamrip_config::qobuz_app_id`], replaced in tests.
+    read_app_id: fn(&Path) -> Option<String>,
     /// When the text box last changed; `None` once it has settled.
     edited_at: Option<Instant>,
 }
@@ -190,7 +208,8 @@ impl Previews {
     /// New lookups wait until the text box has gone [`SETTLE_TIME`] without
     /// a change; until then, it asks `ctx` for a repaint when that time is
     /// up. A new Qobuz auth token first forgets every URL without a Preview,
-    /// so they're looked up again with it.
+    /// so they're looked up again with it. The round's first lookup reads
+    /// the Qobuz `app_id` from `streamrip_config`.
     ///
     /// # Arguments
     ///
@@ -199,8 +218,17 @@ impl Previews {
     /// - `urls`: the pasted URLs with a known Source.
     /// - `edited`: whether the text box changed this frame.
     /// - `qobuz_auth_token`: the Qobuz auth token from Settings.
-    fn update(&mut self, ctx: &egui::Context, urls: &[&str], edited: bool, qobuz_auth_token: &str) {
-        for (round, url, state) in self.receiver.try_iter() {
+    /// - `streamrip_config`: the Streamrip config's path; `None` leaves the
+    ///   `app_id` empty.
+    fn update(
+        &mut self,
+        ctx: &egui::Context,
+        urls: &[&str],
+        edited: bool,
+        qobuz_auth_token: &str,
+        streamrip_config: Option<&Path>,
+    ) {
+        for Finished { round, url, state } in self.receiver.try_iter() {
             if round == self.round {
                 self.by_url.insert(url, state);
             }
@@ -228,13 +256,25 @@ impl Previews {
                 continue;
             }
             self.by_url.insert(url.to_owned(), PreviewState::LookingUp);
-            let (url, auth_token) = (url.to_owned(), qobuz_auth_token.to_owned());
+            let read_app_id = self.read_app_id;
+            let qobuz = self
+                .qobuz_access
+                .get_or_insert_with(|| QobuzAccess {
+                    app_id: streamrip_config.and_then(read_app_id).unwrap_or_default(),
+                    auth_token: qobuz_auth_token.to_owned(),
+                })
+                .clone();
+            let url = url.to_owned();
             let (sender, ctx, round) = (self.sender.clone(), ctx.clone(), self.round);
             thread::spawn(move || {
-                let state = preview_state(&url, auth_token);
+                let result = preview::fetch(&url, &qobuz);
+                if let Err(err) = &result {
+                    tracing::debug!("no preview for {url}: {}", error_chain(err));
+                }
+                let state = state_of(result);
                 // Sending fails only once the form is gone, when the app is
                 // closing, so the answer has nowhere to go anyway.
-                let _ = sender.send((round, url, state));
+                let _ = sender.send(Finished { round, url, state });
                 ctx.request_repaint();
             });
         }
@@ -245,10 +285,11 @@ impl Previews {
     /// A missing Qobuz auth token or `app_id`, or the network, may have been
     /// fixed since. Lookups still running are left to finish, but their
     /// answers are dropped, and the URLs are looked up again: after a
-    /// Download, a lookup still running may have read the Streamrip config
-    /// before the `app_id` was written.
+    /// Download, a lookup still running may have been given the `app_id`
+    /// from before it was written. The new round reads the `app_id` again.
     fn retry(&mut self) {
         self.round += 1;
+        self.qobuz_access = None;
         self.by_url
             .retain(|_, state| matches!(state, PreviewState::Ready(_)));
     }
@@ -259,7 +300,7 @@ impl Previews {
     }
 }
 
-/// No URLs asked about yet, and lookup round 0.
+/// No URLs asked about yet, lookup round 0, and the `app_id` not yet read.
 impl Default for Previews {
     fn default() -> Self {
         let (sender, receiver) = mpsc::channel();
@@ -269,23 +310,14 @@ impl Default for Previews {
             receiver,
             round: 0,
             qobuz_auth_token: String::new(),
+            qobuz_access: None,
+            read_app_id: streamrip_config::qobuz_app_id,
             edited_at: None,
         }
     }
 }
 
-/// Looks up `url`'s Preview, with `auth_token` for a Qobuz URL.
-///
-/// It blocks until the Source answers, so it runs on a thread of its own.
-/// For a Qobuz URL it reads the `app_id` from the Streamrip config, which
-/// stays empty until a first Download has written one. A failed lookup is
-/// logged at debug level.
-///
-/// # Arguments
-///
-/// - `url`: a pasted URL with a known Source.
-/// - `auth_token`: the Qobuz auth token from Settings; unused for other
-///   Sources.
+/// Returns what a URL's line shows for the `result` of its lookup.
 ///
 /// # Returns
 ///
@@ -293,23 +325,14 @@ impl Default for Previews {
 /// - [`PreviewState::Unavailable`] with the error's message, if the Qobuz
 ///   `app_id` or auth token is missing, since that message says what to do.
 /// - [`PreviewState::Unavailable`] with "no preview", for any other failure.
-fn preview_state(url: &str, auth_token: String) -> PreviewState {
-    let app_id = match Source::from_url(url) {
-        Some(Source::Qobuz) => streamrip_config::default_path()
-            .and_then(|config| streamrip_config::qobuz_app_id(&config))
-            .unwrap_or_default(),
-        _ => String::new(),
-    };
-    match preview::fetch(url, &QobuzAccess { app_id, auth_token }) {
+fn state_of(result: Result<Preview, PreviewError>) -> PreviewState {
+    match result {
         Ok(preview) => PreviewState::Ready(preview),
-        Err(err) => {
-            tracing::debug!("no preview for {url}: {}", error_chain(&err));
-            PreviewState::Unavailable(match err {
-                // These say what to do about it.
-                PreviewError::NoQobuzAppId | PreviewError::NoQobuzToken => err.to_string(),
-                _ => "no preview".to_owned(),
-            })
+        // These say what to do about it.
+        Err(err @ (PreviewError::NoQobuzAppId | PreviewError::NoQobuzToken)) => {
+            PreviewState::Unavailable(err.to_string())
         }
+        Err(_) => PreviewState::Unavailable("no preview".to_owned()),
     }
 }
 
@@ -372,8 +395,15 @@ fn split_urls(pasted: &str) -> Vec<&str> {
 
 // == Internal types ===========================================================
 
-/// A lookup's answer: `(round it started in, URL, state)`.
-type Finished = (u64, String, PreviewState);
+/// A lookup's answer, sent back from its thread.
+struct Finished {
+    /// The lookup round it started in.
+    round: u64,
+    /// The URL looked up.
+    url: String,
+    /// What the URL's line shows now.
+    state: PreviewState,
+}
 
 /// Where the lookup of one URL's Preview stands.
 #[derive(Debug, Clone)]
@@ -394,6 +424,7 @@ enum PreviewState {
 mod tests {
     use super::*;
     use ripandload_core::preview::Kind;
+    use std::cell::Cell;
 
     // == Fixtures =============================================================
 
@@ -420,6 +451,114 @@ mod tests {
         previews
     }
 
+    thread_local! {
+        /// How many times [`counting_read`] ran on this test's thread.
+        static READS: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// Counts a read in [`READS`] and finds no `app_id` in `_config`, as
+    /// before a first Download.
+    fn counting_read(_config: &Path) -> Option<String> {
+        READS.with(|reads| reads.set(reads.get() + 1));
+        None
+    }
+
+    /// Returns Previews whose `app_id` reads are counted by
+    /// [`counting_read`], with the count reset to 0.
+    fn counted_previews() -> Previews {
+        READS.with(|reads| reads.set(0));
+        Previews {
+            read_app_id: counting_read,
+            ..Previews::default()
+        }
+    }
+
+    /// Has `previews` look up `urls`, with a Streamrip config path to read.
+    fn look_up(previews: &mut Previews, urls: &[&str]) {
+        let config = Path::new("streamrip.toml");
+        previews.update(&egui::Context::default(), urls, false, "", Some(config));
+    }
+
+    // == Reading the Qobuz app_id =============================================
+
+    /// The `app_id` is read once per round, however many Qobuz URLs.
+    #[test]
+    fn app_id_is_read_once_per_round() {
+        let mut previews = counted_previews();
+
+        look_up(
+            &mut previews,
+            &[
+                "https://open.qobuz.com/album/0060254735180",
+                "https://play.qobuz.com/track/24393117",
+            ],
+        );
+        look_up(&mut previews, &["https://open.qobuz.com/artist/36819"]);
+
+        assert_eq!(READS.with(Cell::get), 1);
+    }
+
+    /// A retry starts a round that reads the `app_id` again.
+    #[test]
+    fn retry_reads_the_app_id_again() {
+        let mut previews = counted_previews();
+        look_up(
+            &mut previews,
+            &["https://open.qobuz.com/album/0060254735180"],
+        );
+
+        previews.retry();
+        look_up(
+            &mut previews,
+            &["https://open.qobuz.com/album/0060254735180"],
+        );
+
+        assert_eq!(READS.with(Cell::get), 2);
+    }
+
+    /// With no URL to look up, the `app_id` isn't read.
+    #[test]
+    fn nothing_to_look_up_reads_nothing() {
+        let mut previews = counted_previews();
+
+        look_up(&mut previews, &[]);
+
+        assert_eq!(READS.with(Cell::get), 0);
+    }
+
+    // == Lookup answers =======================================================
+
+    /// A missing `app_id` or auth token shows the error's message.
+    #[test]
+    fn missing_qobuz_access_says_what_to_do() {
+        for err in [PreviewError::NoQobuzAppId, PreviewError::NoQobuzToken] {
+            let message = err.to_string();
+
+            let state = state_of(Err(err));
+
+            assert!(matches!(state, PreviewState::Unavailable(text) if text == message));
+        }
+    }
+
+    /// Any other failure shows "no preview".
+    #[test]
+    fn other_failures_show_no_preview() {
+        let state = state_of(Err(PreviewError::Unsupported));
+
+        assert!(matches!(state, PreviewState::Unavailable(text) if text == "no preview"));
+    }
+
+    /// A Preview found is `Ready`.
+    #[test]
+    fn a_preview_found_is_ready() {
+        let preview = Preview {
+            kind: Kind::Album,
+            text: "Daft Punk – Discovery".into(),
+        };
+
+        assert!(matches!(state_of(Ok(preview)), PreviewState::Ready(_)));
+    }
+
     // == Retrying =============================================================
 
     /// A retry keeps the Previews found and forgets every other URL.
@@ -441,14 +580,22 @@ mod tests {
         previews.retry();
         previews
             .sender
-            .send((old_round, "looking".into(), ready()))
+            .send(Finished {
+                round: old_round,
+                url: "looking".into(),
+                state: ready(),
+            })
             .unwrap();
         previews
             .sender
-            .send((previews.round, "unavailable".into(), ready()))
+            .send(Finished {
+                round: previews.round,
+                url: "unavailable".into(),
+                state: ready(),
+            })
             .unwrap();
 
-        previews.update(&egui::Context::default(), &[], false, "");
+        previews.update(&egui::Context::default(), &[], false, "", None);
 
         assert!(!previews.by_url.contains_key("looking"));
         assert!(matches!(

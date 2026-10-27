@@ -451,6 +451,7 @@ impl eframe::App for RipAndLoadApp {
                     &mut self.download,
                     run_going,
                     &self.settings.qobuz.auth_token,
+                    self.places.streamrip_config.as_deref(),
                 ) {
                     download_tab::Action::Download => self.start_run(Request::Download {
                         urls: self
