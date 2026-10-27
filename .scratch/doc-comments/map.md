@@ -23,6 +23,7 @@ Two agreed comment style guides in the repo: `docs/style/comments.md` (code-agno
 
 - [Rustdoc and clippy conventions for doc comments](issues/01-rustdoc-clippy-conventions.md): Google `Args:` blocks break in rustdoc, so use Markdown lists and the standard `# Errors`/`# Panics` sections. Doc lints are opt-in via `[workspace.lints]`. Stable rustfmt can't enforce comment width. Dividers must be plain `//`.
 - [Code-agnostic comment style guide](issues/02-code-agnostic-guide.md): `docs/style/comments.md` is agreed. It covers the header, `== Title ===` dividers to column 80, item docs (third-person summary, then Arguments/Returns/Errors/... sections), a one-line form for simple private items and tests, and pure moves allowed to group items into sections.
+- [Rust adaptation of the comment style guide](issues/03-rust-adaptation.md): `docs/style/comments-rust.md` is agreed, written for any Rust project. `//!` header in every file, `// == ===` dividers to column 80 from the line start, impls right after their type, rustdoc `#` sections (Arguments/Returns foldable into prose, Errors/Panics/Safety never), `///` on every field and variant, real doctests only in library crates, and a lint-per-rule table with no prescribed config.
 
 ## Not yet specified
 
