@@ -1,7 +1,7 @@
 # 11 – Apply the comment style: Jobs and job runs
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 10
 
 Part of `../map.md`. Slicing decided in `06-rollout-slicing.md`.
@@ -28,15 +28,23 @@ Comments only. Code changes are limited to pure moves of items into their sectio
 
 ## Acceptance
 
-- [ ] No clippy warnings in these files:
+- [x] No clippy warnings in these files:
   `cargo clippy --workspace --all-targets --message-format=short 2>&1 | grep -E '^(crates/ripandload-core/src/job\.rs|crates/ripandload-core/src/job_run\.rs|crates/ripandload-core/tests/job\.rs|crates/ripandload-core/tests/job_run\.rs):'` prints nothing.
-- [ ] No rustdoc warnings in these files:
+- [x] No rustdoc warnings in these files:
   `cargo doc --workspace --no-deps --document-private-items --message-format=short 2>&1 | grep -E '^(crates/ripandload-core/src/job\.rs|crates/ripandload-core/src/job_run\.rs|crates/ripandload-core/tests/job\.rs|crates/ripandload-core/tests/job_run\.rs):'` prints nothing.
-- [ ] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
-- [ ] `cargo fmt --all --check` and `cargo test --workspace` pass.
-- [ ] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
+- [x] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
+- [x] `cargo fmt --all --check` and `cargo test --workspace` pass.
+- [x] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
 
 ## Notes
 
 - Big files are documented as they are. If a file still reads badly with dividers, say so under Comments as a candidate for a later split; don't split it here.
 - Other files' warnings are out of scope. `dev/check.sh` stays red until ticket 14 is done.
+
+## Comments
+
+- Glossary gaps: "Check tools", "Compare with Server", "Test connection" and "Cancel" are used as terms (they name the app's actions) but have no entries. "Live display" (rich's redrawn rows) is used in `live_output.rs` and here without one either.
+- Glossary conflict: GLOSSARY lists "job" under _Avoid_ for Download, but the types are `Job` (one process) and `JobRun` (Check tools, a Download, an Upload, ...). Prose here says "run" for a `JobRun` and keeps "job" only for `Job`; renaming is out of scope.
+- No split needed. `job.rs` reads as Events, Jobs, Reading output, Waiting. `job_run.rs` is one long `impl` split by nested dividers (Starting a run, Polling and Cancel, Results, Running the queue, Output, Finished commands), with `Kind` and `RipOutput` moved to Internal types.
+- `SSH_FAILED` and `SHELL_NOT_FOUND` stay above the first divider. Only the Finished commands section uses them, but that section is nested in the `impl`, and moving them in would make them associated consts, which is a code change.
+- Code smells, not fixed here (comments only): `upload`, `compare` and `test_connection` repeat the same `ssh_ready(...)` / `tool_path` shape. `Kind` is matched in many places (name, status, failure hints, `on_line`, `start_next`), and `JobRun` holds every run's special cases (pyenv probe, rip version, itemized lines, raw output). Log lines are `String`s told apart by a leading glyph. `RipOutput::of` is a vague name.

@@ -1,5 +1,10 @@
-//! Check tools and Download as jobs, with `rip` played by small sh scripts.
+//! Checks Check tools and Downloads run as a [`JobRun`].
+//!
+//! `rip` is played by small `sh` scripts, through [`script_rip`], so only on
+//! Unix. Check tools' `rsync --version` runs the real rsync, if there is one;
+//! the tests only look at its command line.
 #![cfg(unix)]
+#![allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -12,9 +17,17 @@ use ripandload_core::tool_env::ToolEnv;
 mod common;
 use common::script_rip;
 
+// == Fixtures =================================================================
+
+/// How long a test waits for a run to finish before it calls it hung.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Polls like the GUI does, until the job is over.
+/// Polls the run `job` like the GUI does, writing into `log`, until it's
+/// over.
+///
+/// # Panics
+///
+/// Panics if the run hasn't finished within [`TIMEOUT`].
 fn run_to_end(job: &mut JobRun, log: &mut Vec<String>) {
     let start = Instant::now();
     while !job.is_finished() {
@@ -24,6 +37,7 @@ fn run_to_end(job: &mut JobRun, log: &mut Vec<String>) {
     }
 }
 
+/// Returns a spec that runs `rip` with `args` and no extra environment.
 fn rip_spec(args: &[&str]) -> CommandSpec {
     CommandSpec {
         program: Tool::Rip,
@@ -32,10 +46,14 @@ fn rip_spec(args: &[&str]) -> CommandSpec {
     }
 }
 
+/// Returns whether `log` has a line that is exactly `wanted`.
 fn has_line(log: &[String], wanted: &str) -> bool {
     log.iter().any(|line| line == wanted)
 }
 
+// == Check tools ==============================================================
+
+/// Check tools logs a `✓` when streamrip is the expected version.
 #[test]
 fn check_tools_confirms_the_expected_streamrip_version() {
     let dir = tempfile::tempdir().unwrap();
@@ -53,6 +71,7 @@ fn check_tools_confirms_the_expected_streamrip_version() {
     assert!(has_line(&log, "$ rsync --version"));
 }
 
+/// Another streamrip version is a problem, with a warning in the log.
 #[test]
 fn check_tools_warns_about_another_streamrip_version() {
     let dir = tempfile::tempdir().unwrap();
@@ -70,6 +89,7 @@ fn check_tools_warns_about_another_streamrip_version() {
     assert!(job.status().contains("problem"), "status: {}", job.status());
 }
 
+/// A missing `rip` is a problem, and Check tools still checks rsync.
 #[test]
 fn missing_rip_is_a_problem_and_rsync_is_still_checked() {
     let mut log = Vec::new();
@@ -89,6 +109,7 @@ fn missing_rip_is_a_problem_and_rsync_is_still_checked() {
     assert!(has_line(&log, "$ rsync --version"));
 }
 
+/// Cancel stops the running `rip` and skips the commands after it.
 #[test]
 fn cancel_stops_rip_and_skips_the_rest() {
     let dir = tempfile::tempdir().unwrap();
@@ -110,6 +131,9 @@ fn cancel_stops_rip_and_skips_the_rest() {
     assert_eq!(job.status(), "Check tools cancelled");
 }
 
+// == Downloads ================================================================
+
+/// A Download logs rip's output and no version check, then finishes.
 #[test]
 fn successful_download_has_no_version_check() {
     let dir = tempfile::tempdir().unwrap();
@@ -131,6 +155,7 @@ fn successful_download_has_no_version_check() {
     assert_eq!(job.status(), "Download finished");
 }
 
+/// A failed Download logs rip's error and its exit code as one problem.
 #[test]
 fn failed_download_reports_the_exit_code() {
     let dir = tempfile::tempdir().unwrap();

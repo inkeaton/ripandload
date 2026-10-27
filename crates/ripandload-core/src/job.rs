@@ -1,6 +1,17 @@
-//! Runs one process in the background and streams its output.
+//! One process run in the background, with its output streamed back.
 //!
-//! The GUI polls `Job::events` each frame, so it never blocks on the process.
+//! A [`Job`] starts a process and watches it from threads of its own: one
+//! per output stream, and one that waits for the process to exit. What they
+//! see arrives as [`JobEvent`]s on a channel, which the GUI polls each
+//! frame, so it never blocks on the process. [`JobEvent::Finished`] is
+//! always the last event.
+//!
+//! This module runs a [`Command`] as it is given and knows nothing about
+//! tools or WSL. Building the command is [`ToolEnv::command`]'s job, and
+//! running a sequence of them and writing the log is [`JobRun`]'s.
+//!
+//! [`ToolEnv::command`]: crate::tool_env::ToolEnv::command
+//! [`JobRun`]: crate::job_run::JobRun
 
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, ExitStatus};
@@ -13,40 +24,60 @@ use std::time::Duration;
 use crate::error::JobError;
 use crate::wsl_output::decode_tool_output;
 
-/// How often the job thread checks whether the process has exited or was cancelled.
+/// How often the job thread checks whether the process exited, its output
+/// was read to the end, or it was cancelled.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-/// What a running job reports. `Finished` is always the last event.
+// == Events ===================================================================
+
+/// What a running [`Job`] reports.
+///
+/// A job started with [`Job::spawn`] sends `Line`s, one started with
+/// [`Job::spawn_raw`] sends `Output`, and both end with one `Finished`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobEvent {
     /// One line of stdout or stderr, without its line ending.
     Line(String),
-    /// From `Job::spawn_raw`: the next bytes of stdout or stderr, as they came.
+    /// The next bytes of stdout or stderr, as they came, from
+    /// [`Job::spawn_raw`].
     Output {
+        /// The stream the bytes came from.
         stream: Stream,
+        /// The bytes, which may end in the middle of a line or a character.
         bytes: Vec<u8>,
     },
+    /// How the process ended. No events follow.
     Finished(Outcome),
 }
 
-/// Where `JobEvent::Output` came from. Each is a separate stream of bytes,
-/// so a chunk of one can land in the middle of a line of the other.
+/// Which output stream of the process a [`JobEvent::Output`] came from.
+///
+/// Each is a separate stream of bytes, so a chunk of one can land in the
+/// middle of a line of the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stream {
+    /// The process's standard output.
     Stdout,
+    /// The process's standard error.
     Stderr,
 }
 
+/// How a [`Job`]'s process ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
+    /// It exited with a success status.
     Succeeded,
-    /// `code` is `None` when the process was killed by a signal.
+    /// It exited with a failure status, or couldn't be waited for.
     Failed {
+        /// The exit code, or `None` when the process was killed by a
+        /// signal or its status couldn't be read.
         code: Option<i32>,
     },
+    /// It was killed by [`Job::cancel`].
     Cancelled,
 }
 
+/// Reads `Succeeded` from a success status, `Failed` from any other.
 impl From<ExitStatus> for Outcome {
     fn from(status: ExitStatus) -> Self {
         if status.success() {
@@ -59,26 +90,67 @@ impl From<ExitStatus> for Outcome {
     }
 }
 
-/// A process running on its own thread. Dropping a `Job` cancels it.
+// == Jobs =====================================================================
+
+/// A process running in the background, with its output streamed back.
+///
+/// Dropping a `Job` cancels it.
 #[derive(Debug)]
 pub struct Job {
+    /// The events the job's threads send, in the order they happened.
     events: Receiver<JobEvent>,
+    /// Set by [`Job::cancel`]; the job thread kills the process once it sees
+    /// it.
     cancelled: Arc<AtomicBool>,
 }
 
 impl Job {
-    /// Starts `command`. Its stdout and stderr are streamed line by line if
-    /// they were set to `Stdio::piped()`, as `ToolEnv::command` does.
+    /// Starts `command` and streams its output line by line.
+    ///
+    /// Only the streams set to `Stdio::piped()` are read, as
+    /// [`ToolEnv::command`] sets both. Each line arrives as a
+    /// [`JobEvent::Line`], decoded with [`decode_tool_output`].
+    ///
+    /// # Errors
+    ///
+    /// [`JobError::Spawn`] if the process can't be started, e.g. because the
+    /// program doesn't exist.
+    ///
+    /// [`ToolEnv::command`]: crate::tool_env::ToolEnv::command
     pub fn spawn(command: Command) -> Result<Job, JobError> {
         Self::spawn_with(command, forward_lines)
     }
 
-    /// Like `spawn`, but streams the output as it comes, without waiting for
-    /// a line to end. For output that redraws itself, like progress bars.
+    /// Starts `command` and streams its output as it comes.
+    ///
+    /// Like [`Job::spawn`], but it doesn't wait for a line to end: each
+    /// chunk read arrives as a [`JobEvent::Output`], as raw bytes. This is
+    /// for output that redraws itself, like progress bars.
+    ///
+    /// # Errors
+    ///
+    /// [`JobError::Spawn`] if the process can't be started, e.g. because the
+    /// program doesn't exist.
     pub fn spawn_raw(command: Command) -> Result<Job, JobError> {
         Self::spawn_with(command, forward_chunks)
     }
 
+    /// Starts `command`, with `forward` reading each of its piped streams.
+    ///
+    /// A job thread waits for the process, then for the readers, and sends
+    /// `Finished` last. It stops waiting for the readers on Cancel, since a
+    /// grandchild may hold the pipes open after the process has exited.
+    ///
+    /// # Arguments
+    ///
+    /// - `command`: the process to start.
+    /// - `forward`: what starts a reader thread for one stream, which
+    ///   decides the events it sends: [`forward_lines`] or
+    ///   [`forward_chunks`].
+    ///
+    /// # Errors
+    ///
+    /// [`JobError::Spawn`] if the process can't be started.
     fn spawn_with(mut command: Command, forward: Forward) -> Result<Job, JobError> {
         let mut child = command.spawn().map_err(|source| JobError::Spawn {
             program: command.get_program().to_string_lossy().into_owned(),
@@ -106,7 +178,8 @@ impl Job {
         thread::spawn(move || {
             let mut outcome = wait(&mut child, &flag);
             // Let the readers finish, so every line arrives before `Finished`.
-            // A grandchild may still hold the pipes open, so Cancel keeps working.
+            // A grandchild may still hold the pipes open, so Cancel keeps
+            // working.
             while outcome != Outcome::Cancelled && !readers.iter().all(JoinHandle::is_finished) {
                 if flag.load(Ordering::Relaxed) {
                     outcome = Outcome::Cancelled;
@@ -120,27 +193,45 @@ impl Job {
         Ok(Job { events, cancelled })
     }
 
-    /// The job's events. Use `try_recv` to poll without blocking.
+    /// Returns the channel the job's events arrive on.
+    ///
+    /// Poll it with `try_recv`, which never blocks.
     pub fn events(&self) -> &Receiver<JobEvent> {
         &self.events
     }
 
-    /// Kills the process. `Finished(Cancelled)` follows shortly.
+    /// Kills the process; `Finished(Cancelled)` follows shortly.
+    ///
+    /// Calling it on a job that already finished does nothing.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
 }
 
+/// Cancels the job, so a dropped `Job` never leaves its process running.
 impl Drop for Job {
     fn drop(&mut self) {
         self.cancel();
     }
 }
 
-/// Starts a thread that sends what a stream of the process says.
+// == Reading output ===========================================================
+
+/// Starts a thread that sends what one stream of the process says.
+///
+/// Its arguments are the stream to read, which one it is, and where to send
+/// the events. The thread ends when the stream closes or nobody listens.
 type Forward = fn(Box<dyn Read + Send>, Stream, Sender<JobEvent>) -> JoinHandle<()>;
 
-/// Sends each line of `stream` until it closes or nobody is listening.
+/// Starts a thread that sends each line of `stream` to `sender` as a `Line`.
+///
+/// Lines end at `\n`, and a `\r` before it is dropped. The thread stops when
+/// `stream` closes, fails, or `sender` has nobody listening. The [`Stream`]
+/// is ignored: lines don't say which stream they came from.
+///
+/// # Returns
+///
+/// The thread's handle, which is finished once the thread has stopped.
 fn forward_lines(
     stream: Box<dyn Read + Send>,
     _: Stream,
@@ -166,8 +257,15 @@ fn forward_lines(
     })
 }
 
-/// Sends whatever `stream` has, as soon as it has it, until it closes or
-/// nobody is listening.
+/// Starts a thread that sends whatever `reader` has as soon as it has it.
+///
+/// Each read becomes one `Output` to `sender`, tagged with `stream`. The
+/// thread stops when `reader` closes, fails, or `sender` has nobody
+/// listening.
+///
+/// # Returns
+///
+/// The thread's handle, which is finished once the thread has stopped.
 fn forward_chunks(
     mut reader: Box<dyn Read + Send>,
     stream: Stream,
@@ -191,7 +289,14 @@ fn forward_chunks(
     })
 }
 
-/// Waits for `child` to exit, killing it if `cancelled` gets set.
+// == Waiting ==================================================================
+
+/// Waits for `child` to exit, killing it once `cancelled` is set.
+///
+/// # Returns
+///
+/// How `child` exited; `Cancelled` if it was killed; `Failed` with no code
+/// if its status couldn't be read.
 fn wait(child: &mut Child, cancelled: &AtomicBool) -> Outcome {
     loop {
         match child.try_wait() {
