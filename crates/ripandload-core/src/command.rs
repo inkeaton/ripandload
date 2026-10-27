@@ -416,6 +416,7 @@ fn ssh_options(server: &Server) -> Vec<String> {
 // == Tests ====================================================================
 
 #[cfg(test)]
+#[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 mod tests {
     use super::*;
     use std::path::PathBuf;

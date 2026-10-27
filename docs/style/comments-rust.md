@@ -337,6 +337,7 @@ A `macro_rules!` takes a full doc. It describes the syntax it accepts under
 // == Tests ====================================================================
 
 #[cfg(test)]
+#[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 mod tests {
     use super::*;
 
@@ -352,6 +353,8 @@ mod tests {
 
 - `mod tests` sits last, under a column-0 `// == Tests ===` divider. The
   module itself takes no doc; the divider names it.
+- The `#[allow(clippy::missing_panics_doc)]` is needed only when
+  `check-private-items` is on (see "Tooling").
 - Nested dividers group tests by the behavior they check, once there are two
   or more groups.
 - A `#[test]` fn takes the short form: one `///` line stating the behavior
@@ -392,6 +395,12 @@ go in `clippy.toml`.
 
 No stable tool checks the column-80 limit, the divider form, the section
 order, or the Arguments/Returns content.
+
+With `check-private-items`, `missing_panics_doc` also flags every
+documented `#[test]` fn, since each assertion can panic, and the lint has
+no test exemption. Allow it on the test code instead of writing `# Panics` there:
+`#[allow(clippy::missing_panics_doc, reason = "...")]` on `mod tests`, and
+`#![allow(...)]` after the `//!` header of each `tests/*.rs` file.
 
 ## Checklist
 

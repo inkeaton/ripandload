@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # eframe.workspace = true means "use the version 
 # declared in the root Cargo.toml". Both crates 

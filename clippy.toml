@@ -1,0 +1,3 @@
+# `# Errors` and `# Panics` are required on private items too
+# (docs/style/comments-rust.md).
+check-private-items = true
