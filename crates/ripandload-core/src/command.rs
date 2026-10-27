@@ -1,26 +1,45 @@
-//! What to run, as plain values. Turning these into real processes is
-//! `tool_env`'s job, so the same `CommandSpec` works natively and under WSL.
+//! Command lines for the tools the app runs, as plain values.
+//!
+//! Every step of a Download, an Upload, Compare with Server, Test connection
+//! and Check tools is one [`CommandSpec`]: which [`Tool`] to run, its
+//! arguments and extra environment variables. This module builds those specs
+//! and reads back the few lines of tool output the app acts on.
+//!
+//! This module starts no processes and knows nothing about WSL. Turning a
+//! spec into a real process is [`ToolEnv`]'s job, so the same spec runs
+//! natively and under WSL. Paths in a spec must already be as the tool sees
+//! them: callers convert them with [`ToolEnv::tool_path`] first.
+//!
+//! [`ToolEnv`]: crate::tool_env::ToolEnv
+//! [`ToolEnv::tool_path`]: crate::tool_env::ToolEnv::tool_path
 
 use std::fmt;
 use std::path::Path;
 
 use crate::settings::Server;
 
-/// The streamrip version the app's Streamrip config is written for.
-pub const STREAMRIP_VERSION: &str = "2.2.0";
+// == Command lines ============================================================
 
-/// A program the app runs. `tool_env` decides where each one lives.
+/// A program the app runs.
+///
+/// It only names the program. Where each one lives, natively or inside WSL,
+/// is decided by [`ToolEnv`].
+///
+/// [`ToolEnv`]: crate::tool_env::ToolEnv
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
+    /// streamrip, which runs Downloads and is checked by Check tools.
     Rip,
+    /// rsync, which runs Uploads and Compare with Server.
     Rsync,
+    /// ssh, which runs Test connection's checks on the Server.
     Ssh,
-    /// Small helper scripts, e.g. copying the SSH key into WSL.
+    /// `sh`, for small helper scripts, e.g. copying the SSH key into WSL.
     Sh,
 }
 
 impl Tool {
-    /// The executable's name, as looked up on PATH.
+    /// Returns the executable's name, as looked up on `PATH`.
     pub fn name(self) -> &'static str {
         match self {
             Tool::Rip => "rip",
@@ -31,15 +50,24 @@ impl Tool {
     }
 }
 
-/// One command line: which tool, its arguments and extra environment variables.
+/// One command line: a tool, its arguments and extra environment variables.
+///
+/// Two specs are equal when they run the same command. [`JobRun`] relies on
+/// this to recognize its probe steps, such as [`wsl_check_spec`].
+///
+/// [`JobRun`]: crate::job_run::JobRun
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
+    /// The program to run.
     pub program: Tool,
+    /// The arguments, in order, each passed to the program as one argument.
     pub args: Vec<String>,
+    /// Variables set on top of the inherited environment: `(name, value)`.
     pub env: Vec<(String, String)>,
 }
 
 impl CommandSpec {
+    /// A spec that runs `program` with `args` and no extra environment.
     fn new(program: Tool, args: &[&str]) -> Self {
         Self {
             program,
@@ -49,7 +77,7 @@ impl CommandSpec {
     }
 }
 
-/// Shows the command the way it would be typed, for the log.
+/// Shows the command the way it would be typed, unquoted, for the log.
 impl fmt::Display for CommandSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.program.name())?;
@@ -60,7 +88,35 @@ impl fmt::Display for CommandSpec {
     }
 }
 
-/// The commands behind "Check tools": `rip --version`, then `rsync --version`.
+// == Shell scripts ============================================================
+
+/// Returns a spec that runs `script` through `sh -c`, with `args`.
+///
+/// Inside the script, `$1`, `$2`… are `args` and `$0` is `sh`.
+///
+/// # Returns
+///
+/// `sh -c <script> sh <args>…`, or just `sh -c <script>` when `args` is
+/// empty.
+pub fn sh_spec(script: &str, args: &[&str]) -> CommandSpec {
+    let mut spec = CommandSpec::new(Tool::Sh, &["-c", script]);
+    if !args.is_empty() {
+        spec.args.push("sh".to_owned());
+        spec.args.extend(args.iter().map(|arg| arg.to_string()));
+    }
+    spec
+}
+
+// == Check tools ==============================================================
+
+/// The streamrip version the app's Streamrip config is written for.
+pub const STREAMRIP_VERSION: &str = "2.2.0";
+
+/// Returns Check tools' commands: `rip --version`, then `rsync --version`.
+///
+/// Inside WSL, [`JobRun`] runs [`wsl_check_spec`] before these.
+///
+/// [`JobRun`]: crate::job_run::JobRun
 pub fn version_specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(Tool::Rip, &["--version"]),
@@ -68,22 +124,77 @@ pub fn version_specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// `rip --config-path <config> config path`. If `config` doesn't exist,
-/// streamrip creates a default one there before printing its path.
+/// Returns Check tools' first step inside WSL, which runs `true` there.
+///
+/// It finds out whether anything can run inside WSL at all, before the
+/// tools themselves are checked.
+pub fn wsl_check_spec() -> CommandSpec {
+    sh_spec("true", &[])
+}
+
+/// Returns a script that lists the streamrip installs under pyenv.
+///
+/// Check tools runs it inside WSL when `rip` isn't where Settings say. Its
+/// output is one path per line, or nothing when pyenv has no streamrip.
+pub fn pyenv_probe_spec() -> CommandSpec {
+    sh_spec(
+        "ls -d ~/.pyenv/versions/*/bin/rip ~/.pyenv/shims/rip 2>/dev/null",
+        &[],
+    )
+}
+
+/// Finds the version number in a line of `rip --version` output.
+///
+/// # Arguments
+///
+/// - `line`: one line of output, e.g. `rip, version 2.2.0`. Whitespace
+///   around it, such as its newline, is ignored.
+///
+/// # Returns
+///
+/// The version, e.g. `2.2.0`, or `None` when `line` is any other line or
+/// its version is empty.
+pub fn parse_rip_version(line: &str) -> Option<&str> {
+    let (_, version) = line.trim().split_once(", version ")?;
+    Some(version.trim()).filter(|version| !version.is_empty())
+}
+
+// == Streamrip config =========================================================
+
+/// Returns `rip --config-path <config> config path`.
+///
+/// If no file exists at `config`, streamrip writes its default config there
+/// before printing the path. This is how the Streamrip config is first
+/// created, before the app fills it in from Settings.
+///
+/// # Arguments
+///
+/// - `config`: the Streamrip config's path, as rip sees it.
 pub fn seed_config_spec(config: &str) -> CommandSpec {
     CommandSpec::new(Tool::Rip, &["--config-path", config, "config", "path"])
 }
 
+// == Downloads ================================================================
+
 /// How wide rip's progress bars are drawn, in characters.
 pub const PROGRESS_COLUMNS: usize = 100;
 
-/// A Download: `rip --config-path <config> [-q N] url <urls>…`.
-/// `quality` overrides the Settings' Quality for every Source in this run.
+/// Returns a Download: `rip --config-path <config> [-q N] url <urls>…`.
 ///
-/// rich, which draws rip's progress bars, draws none into a pipe. Its
-/// environment variables make it draw them anyway, for `LiveOutput` to read:
+/// rich, which draws rip's progress bars, draws none into a pipe. The spec's
+/// environment makes it draw them anyway, for [`LiveOutput`] to read:
 /// `FORCE_COLOR` for rich 13 (which streamrip 2.2.0 pins), `TTY_COMPATIBLE`
-/// and `TTY_INTERACTIVE` for rich 14 and later.
+/// and `TTY_INTERACTIVE` for rich 14 and later. `COLUMNS` sets their width
+/// to [`PROGRESS_COLUMNS`].
+///
+/// # Arguments
+///
+/// - `config`: the Streamrip config's path, as rip sees it.
+/// - `urls`: the pasted URLs, downloaded in this order.
+/// - `quality`: the Quality for every Source in this run, overriding the
+///   one in Settings. `None` keeps the Settings' Quality.
+///
+/// [`LiveOutput`]: crate::live_output::LiveOutput
 pub fn download_spec(config: &str, urls: &[&str], quality: Option<u8>) -> CommandSpec {
     let mut spec = CommandSpec::new(Tool::Rip, &["--config-path", config]);
     if let Some(quality) = quality {
@@ -102,8 +213,16 @@ pub fn download_spec(config: &str, urls: &[&str], quality: Option<u8>) -> Comman
     spec
 }
 
-/// An Upload: rsync the Staging folder's contents into the Server's music folder.
-/// `staging` is the Staging folder as rsync sees it (`ToolEnv::tool_path`).
+// == Uploads and Compare with Server ==========================================
+
+/// Returns an Upload: rsync of the Staging folder into the music folder.
+///
+/// The arguments are [`rsync_args`].
+///
+/// # Arguments
+///
+/// - `staging`: the Staging folder, as rsync sees it.
+/// - `server`: the Server to Upload to.
 pub fn upload_spec(staging: &Path, server: &Server) -> CommandSpec {
     CommandSpec {
         program: Tool::Rsync,
@@ -112,11 +231,25 @@ pub fn upload_spec(staging: &Path, server: &Server) -> CommandSpec {
     }
 }
 
-/// `-rtv --partial --chmod=D755,F644 -e "<ssh …>" <staging>/ <user>@<host>:<music folder>/`.
+/// Returns the Upload's rsync arguments.
 ///
 /// The trailing slash on `staging` copies what's inside it rather than the
-/// folder itself; the one on the music folder makes rsync treat it as a folder.
-/// There's no `--delete`: an Upload never removes anything on the Server.
+/// folder itself; the one on the music folder makes rsync treat it as a
+/// folder. A slash that is already there isn't doubled. There's no
+/// `--delete`: an Upload never removes anything on the Server.
+///
+/// # Arguments
+///
+/// - `server`: the Server to Upload to. Its login and SSH key go into the
+///   ssh command line after `-e`.
+/// - `staging`: the Staging folder, as rsync sees it.
+///
+/// # Format
+///
+/// ```text
+/// -rtv --partial --chmod=D755,F644 -e "<ssh …>"
+///     <staging>/ <user>@<host>:<music folder>/
+/// ```
 pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
     let path = check_trailing_slash(&staging.display().to_string());
     let remote_folder = check_trailing_slash(&server.music_folder);
@@ -132,9 +265,43 @@ pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
     ]
 }
 
-/// The Upload's rsync as a dry run: it sends nothing, and lists each file an
-/// Upload would send, one `itemized_file` line each. `--8-bit-output` keeps
-/// names like "Björk" readable when rsync runs in the C locale, as in WSL.
+/// Returns the ssh command line for rsync's `-e`, to reach `server`.
+///
+/// rsync splits it on spaces itself, honoring quotes, where a doubled quote
+/// stands for a literal one. So an option holding a space or a quote is
+/// wrapped in single quotes, with its own single quotes doubled.
+fn remote_shell(server: &Server) -> String {
+    let mut command = String::from("ssh");
+    for option in ssh_options(server) {
+        command.push(' ');
+        if option.contains([' ', '\'', '"']) {
+            command.push_str(&format!("'{}'", option.replace('\'', "''")));
+        } else {
+            command.push_str(&option);
+        }
+    }
+    command
+}
+
+/// Returns `value` with a trailing `/`, added only when it has none.
+fn check_trailing_slash(value: &str) -> String {
+    if value.ends_with("/") {
+        value.to_string()
+    } else {
+        format!("{value}/")
+    }
+}
+
+/// Returns Compare with Server's command: the Upload's rsync as a dry run.
+///
+/// It sends nothing, and lists each file an Upload would send, one line
+/// each, for [`itemized_file`] to read. `--8-bit-output` keeps names like
+/// "Björk" readable when rsync runs in the C locale, as in WSL.
+///
+/// # Arguments
+///
+/// - `staging`: the Staging folder, as rsync sees it.
+/// - `server`: the Server to compare with.
 pub fn compare_spec(staging: &Path, server: &Server) -> CommandSpec {
     // Options go first, so the Upload's own arguments stay as they are.
     let mut args: Vec<String> = ["--dry-run", "--itemize-changes", "--8-bit-output"]
@@ -148,27 +315,45 @@ pub fn compare_spec(staging: &Path, server: &Server) -> CommandSpec {
     }
 }
 
-/// The file in one line of `compare_spec`'s output, relative to the Staging
-/// folder, if rsync would send it. A line is an 11-letter code, a space and
-/// the name. The code starts `<f` for a file sent to the Server (`>f` when
-/// copying locally); folders, attribute-only changes and rsync's chatter
-/// don't count.
+/// Finds the file an Upload would send in a line of [`compare_spec`] output.
+///
+/// # Arguments
+///
+/// - `line`: one line of rsync's output, without its newline.
+///
+/// # Returns
+///
+/// The file's path relative to the Staging folder, or `None` when the line
+/// doesn't name a file rsync would send: a folder, a change to attributes
+/// only, or rsync's own messages.
+///
+/// # Format
+///
+/// An 11-letter code, a space and the name. The code starts `<f` for a file
+/// sent to the Server (`>f` when copying locally):
+///
+/// ```text
+/// <f+++++++++ Björk - Debut/Disc 1/01. Human Behaviour.flac
+/// ```
 pub fn itemized_file(line: &str) -> Option<&str> {
     let (code, name) = line.split_once(' ')?;
     let sent = code.len() == 11 && (code.starts_with("<f") || code.starts_with(">f"));
     sent.then_some(name)
 }
 
-fn check_trailing_slash(value: &str) -> String {
-    if value.ends_with("/") {
-        value.to_string()
-    } else {
-        format!("{value}/")
-    }
-}
+// == Test connection ==========================================================
 
-/// The commands behind "Test connection": log in and run `true`, then check
-/// that the music folder exists and is writable.
+/// Returns Test connection's commands, both run on `server` over ssh.
+///
+/// Each remote command is a single argument after `--`, quoted for the
+/// Server's shell.
+///
+/// # Returns
+///
+/// Two specs, in the order they run:
+///
+/// 1. One that logs in and runs `true`.
+/// 2. One that checks that the music folder exists and is writable.
 pub fn test_connection_specs(server: &Server) -> Vec<CommandSpec> {
     let folder = match server.music_folder.strip_prefix("~/") {
         // Left unquoted so the Server's shell expands it, as rsync does.
@@ -192,9 +377,23 @@ pub fn test_connection_specs(server: &Server) -> Vec<CommandSpec> {
     .collect()
 }
 
-/// `-i <key> -p <port>` plus options that never stop to ask a question:
-/// a new host key is accepted, a changed one or a password prompt fails.
-/// Without a key, ssh tries its defaults and ssh-agent.
+/// Returns `text` quoted for the Server's shell, which runs ssh's commands.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+// == Helpers ==================================================================
+
+/// Returns the ssh options that reach `server` without asking anything.
+///
+/// A new host key is accepted; a changed one, or a password prompt, fails
+/// instead of stopping to ask.
+///
+/// # Returns
+///
+/// `-i <key> -p <port>` and the options above, or just `-p <port>` and the
+/// options when `server` has no SSH key, so ssh tries its defaults and
+/// ssh-agent.
 fn ssh_options(server: &Server) -> Vec<String> {
     let mut options = Vec::new();
     if !server.ssh_key.as_os_str().is_empty() {
@@ -214,61 +413,29 @@ fn ssh_options(server: &Server) -> Vec<String> {
     options
 }
 
-/// The ssh command line for rsync's `-e`. rsync splits it on spaces itself,
-/// honouring quotes, where a doubled quote stands for a literal one.
-fn remote_shell(server: &Server) -> String {
-    let mut command = String::from("ssh");
-    for option in ssh_options(server) {
-        command.push(' ');
-        if option.contains([' ', '\'', '"']) {
-            command.push_str(&format!("'{}'", option.replace('\'', "''")));
-        } else {
-            command.push_str(&option);
-        }
-    }
-    command
-}
-
-/// Quotes `text` for the Server's shell, which runs ssh's remote command.
-fn shell_quote(text: &str) -> String {
-    format!("'{}'", text.replace('\'', r"'\''"))
-}
-
-/// `sh -c <script> sh <args>…`: inside the script, `$1`… are `args`.
-pub fn sh_spec(script: &str, args: &[&str]) -> CommandSpec {
-    let mut spec = CommandSpec::new(Tool::Sh, &["-c", script]);
-    if !args.is_empty() {
-        spec.args.push("sh".to_owned());
-        spec.args.extend(args.iter().map(|arg| arg.to_string()));
-    }
-    spec
-}
-
-/// Check tools' first step inside WSL: can anything run there at all?
-pub fn wsl_check_spec() -> CommandSpec {
-    sh_spec("true", &[])
-}
-
-/// Lists streamrip installs under pyenv, one path per line, for when `rip`
-/// isn't where Settings say inside WSL.
-pub fn pyenv_probe_spec() -> CommandSpec {
-    sh_spec(
-        "ls -d ~/.pyenv/versions/*/bin/rip ~/.pyenv/shims/rip 2>/dev/null",
-        &[],
-    )
-}
-
-/// Finds the version in `rip --version` output, e.g. `rip, version 2.2.0`.
-pub fn parse_rip_version(line: &str) -> Option<&str> {
-    let (_, version) = line.trim().split_once(", version ")?;
-    Some(version.trim()).filter(|version| !version.is_empty())
-}
+// == Tests ====================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    // == Fixtures =============================================================
+
+    /// Returns a Server with a user, a non-default port and an SSH key.
+    fn server() -> Server {
+        Server {
+            host: "music.example.org".into(),
+            user: "fance".into(),
+            port: 21,
+            music_folder: "/srv/subsonic/Music".into(),
+            ssh_key: PathBuf::from("/home/mari/.ssh/navidrome_rsync_key"),
+        }
+    }
+
+    // == Check tools ==========================================================
+
+    /// Check tools runs `rip --version`, then `rsync --version`, as they are.
     #[test]
     fn version_specs_check_rip_then_rsync() {
         let specs = version_specs();
@@ -277,6 +444,24 @@ mod tests {
         assert!(specs.iter().all(|spec| spec.env.is_empty()));
     }
 
+    /// The version is read from a `rip --version` line, newline or not.
+    #[test]
+    fn rip_version_is_parsed() {
+        assert_eq!(parse_rip_version("rip, version 2.2.0\n"), Some("2.2.0"));
+        assert_eq!(parse_rip_version("rip, version 2.1.0"), Some("2.1.0"));
+    }
+
+    /// Other lines, and a `rip --version` line with no version, give `None`.
+    #[test]
+    fn other_lines_have_no_rip_version() {
+        assert_eq!(parse_rip_version("Usage: rip [OPTIONS]"), None);
+        assert_eq!(parse_rip_version("rip, version "), None);
+        assert_eq!(parse_rip_version(""), None);
+    }
+
+    // == Streamrip config =====================================================
+
+    /// Seeding points rip at the Streamrip config, as one argument.
     #[test]
     fn seed_config_spec_points_rip_at_the_streamrip_config() {
         let spec = seed_config_spec("/home/a b/streamrip.toml");
@@ -292,6 +477,9 @@ mod tests {
         );
     }
 
+    // == Downloads ============================================================
+
+    /// A Download without a Quality override passes no `-q`.
     #[test]
     fn download_spec_uses_the_settings_quality_by_default() {
         let spec = download_spec(
@@ -305,6 +493,7 @@ mod tests {
         );
     }
 
+    /// A Download's environment makes rich draw progress bars into a pipe.
     #[test]
     fn download_spec_makes_rich_draw_progress_bars_into_a_pipe() {
         let spec = download_spec("/cfg/streamrip.toml", &["u1"], None);
@@ -321,6 +510,7 @@ mod tests {
         assert_eq!(env("COLUMNS"), Some(PROGRESS_COLUMNS.to_string().as_str()));
     }
 
+    /// A Quality override goes in as `-q N`, before `url`.
     #[test]
     fn download_spec_passes_a_quality_override() {
         let spec = download_spec(
@@ -341,6 +531,7 @@ mod tests {
         );
     }
 
+    /// A Download passes every URL after `url`, in order.
     #[test]
     fn download_spec_takes_every_url_in_order() {
         let spec = download_spec("/a b/streamrip.toml", &["u1", "u2", "u3"], None);
@@ -349,16 +540,9 @@ mod tests {
         assert_eq!(spec.args[spec.args.len() - 4..], ["url", "u1", "u2", "u3"]);
     }
 
-    fn server() -> Server {
-        Server {
-            host: "music.example.org".into(),
-            user: "fance".into(),
-            port: 21,
-            music_folder: "/srv/subsonic/Music".into(),
-            ssh_key: PathBuf::from("/home/mari/.ssh/navidrome_rsync_key"),
-        }
-    }
+    // == Uploads and Compare with Server ======================================
 
+    /// An Upload copies the Staging folder's contents into the music folder.
     #[test]
     fn rsync_copies_the_staging_contents_into_the_music_folder() {
         let args = rsync_args(&server(), Path::new("/home/mari/Music/ripandload"));
@@ -376,6 +560,7 @@ mod tests {
         );
     }
 
+    /// Compare with Server is the Upload's rsync as a dry run listing files.
     #[test]
     fn compare_is_the_upload_as_a_dry_run_that_lists_each_file() {
         let staging = Path::new("/home/mari/Music/ripandload");
@@ -390,9 +575,10 @@ mod tests {
         assert_eq!(compare.args[3..], upload.args);
     }
 
+    /// Itemized lines give exactly the files an Upload would send.
     #[test]
     fn itemized_lines_give_the_files_an_upload_would_send() {
-        // Recorded from `rsync -rtv --dry-run --itemize-changes --8-bit-output`.
+        // Output of `rsync -rtv --dry-run --itemize-changes --8-bit-output`.
         let output = "\
 sending incremental file list
 cd+++++++++ Björk - Debut/
@@ -417,6 +603,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         );
     }
 
+    /// Both rsync paths end in exactly one slash, even when given one.
     #[test]
     fn rsync_paths_get_exactly_one_trailing_slash() {
         let mut server = server();
@@ -428,6 +615,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         );
     }
 
+    /// An Upload never deletes anything on the Server.
     #[test]
     fn rsync_never_deletes_on_the_server() {
         let args = rsync_args(&server(), Path::new("/staging"));
@@ -439,6 +627,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         );
     }
 
+    /// A key path with spaces and quotes is quoted for rsync's remote shell.
     #[test]
     fn rsync_quotes_a_key_path_with_spaces_for_its_remote_shell() {
         let mut server = server();
@@ -451,6 +640,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         );
     }
 
+    /// Without a key or a user, an Upload leaves both to ssh's defaults.
     #[test]
     fn rsync_without_a_key_or_user_uses_ssh_defaults() {
         let mut server = server();
@@ -464,6 +654,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         assert_eq!(args[6], "music.example.org:/srv/subsonic/Music/");
     }
 
+    /// An Upload runs rsync from the Staging folder, with no extra env.
     #[test]
     fn upload_spec_runs_rsync_from_the_staging_folder() {
         let spec = upload_spec(Path::new("/home/mari/Music/ripandload"), &server());
@@ -478,6 +669,9 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         assert!(spec.env.is_empty());
     }
 
+    // == Test connection ======================================================
+
+    /// Test connection logs in, then checks the music folder.
     #[test]
     fn test_connection_logs_in_then_checks_the_music_folder() {
         let mut server = server();
@@ -497,6 +691,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         );
     }
 
+    /// Test connection passes its folder check to ssh as one argument.
     #[test]
     fn test_connection_passes_the_remote_check_as_one_argument() {
         let mut server = server();
@@ -509,6 +704,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         );
     }
 
+    /// Test connection leaves a `~/` music folder for the Server to expand.
     #[test]
     fn test_connection_lets_the_server_expand_a_home_folder() {
         let mut server = server();
@@ -518,18 +714,5 @@ total size is 6  speedup is 0.02 (DRY RUN)";
             specs[1].args.last().unwrap(),
             "test -d ~/'my music' && test -w ~/'my music'"
         );
-    }
-
-    #[test]
-    fn rip_version_is_parsed() {
-        assert_eq!(parse_rip_version("rip, version 2.2.0\n"), Some("2.2.0"));
-        assert_eq!(parse_rip_version("rip, version 2.1.0"), Some("2.1.0"));
-    }
-
-    #[test]
-    fn other_lines_have_no_rip_version() {
-        assert_eq!(parse_rip_version("Usage: rip [OPTIONS]"), None);
-        assert_eq!(parse_rip_version("rip, version "), None);
-        assert_eq!(parse_rip_version(""), None);
     }
 }

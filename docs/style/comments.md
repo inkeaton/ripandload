@@ -34,6 +34,8 @@ adaptation wins for that language.
   are the only ornament.
 - Wrap prose at word boundaries; keep list items and labelled entries on as
   few lines as reads cleanly.
+- Literal blocks (formats, examples) keep the limit too. Wrap a long line
+  and indent its continuation four spaces past the line it continues.
 
 ## 1. File header
 
@@ -87,15 +89,18 @@ padding out to column 80.
 **Section order** follows the reader's path into the file:
 
 1. Shared constants and data types the public API returns
-2. Public API
+2. Public API: one section by that name, or, when the public API covers
+   several topics, one section per topic, named after it ("Downloads",
+   "Uploads")
 3. Internal sections, in the order the public API reaches them
    (e.g. "Pre-scan", then "Emit Director", then "Emit Role")
 4. Helpers — small utilities used across sections
 5. Internal types — private data types used only inside the file
 6. Tests, where the language keeps them in the same file
 
-**Reordering.** Applying this guide may move items so that each section
-holds related code. Moves are pure: the moved code is not edited.
+**Reordering.** Converting an existing file to this guide may move items
+so that each section holds related code. Such moves are pure: the moved
+code is not edited.
 
 ### Dividers inside a body
 
@@ -194,7 +199,8 @@ Test files follow the same header and divider rules; sections group tests
 by the behaviour they check. A test function takes the short form: one
 summary line stating the behaviour checked as a fact (_"A cancelled
 Download reports Cancelled, not Failed."_), plus details only when its
-setup needs explaining. Test helpers and fixtures get full item docs.
+setup needs explaining. Test helpers and fixtures get full item docs, and
+sit in a first "Fixtures" section, before the tests that use them.
 
 ## Checklist
 

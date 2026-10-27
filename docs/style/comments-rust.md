@@ -97,7 +97,8 @@ placement rules:
 - An **inherent `impl`** sits directly after its type, in that type's
   section. Its **trait impls** (`Display`, `From`, `Default`, ...) follow
   the inherent `impl`.
-- **Public free functions** go under "Public API".
+- **Public free functions** go under "Public API", or under topic
+  sections when the public API covers several topics (see `comments.md`).
 - A long `impl` is split by nested dividers, indented to its members:
 
   ```rust
@@ -189,7 +190,15 @@ pub fn send(entry: &Entry, dest: &Path) -> Result<u64, Error> {
 - **Safety**: for an `unsafe fn`, every invariant the caller must uphold.
 - **Examples**: the "Usage" of `comments.md`. See "Doctests".
 - **Format**: the shape of text or data the item reads or writes, in a
-  ` ```text ` block.
+  ` ```text ` block. A line too long for column 80 wraps, its continuation
+  indented four spaces:
+
+  ```rust
+  /// ```text
+  /// -rtv --partial -e "<ssh …>"
+  ///     <local folder>/ <user>@<host>:<remote folder>/
+  /// ```
+  ```
 
 ### Folding Arguments and Returns into prose
 
@@ -197,7 +206,9 @@ pub fn send(entry: &Entry, dest: &Path) -> Result<u64, Error> {
 already cover them fully:
 
 - A summary that starts "Returns ..." and states the whole output replaces
-  `# Returns`.
+  `# Returns`. Only the summary line can do this: when any case (`None`,
+  empty, an alternative form) doesn't fit on it, write `# Returns` and put
+  every case there, not some in the details.
 - Prose that names every parameter in backticks and says what each means
   replaces `# Arguments`.
 
@@ -277,6 +288,15 @@ A `macro_rules!` takes a full doc. It describes the syntax it accepts under
   doc use plain backticks.
 - A `pub` item never links to a private one. rustdoc warns about this even
   with `--document-private-items`, so use plain backticks there.
+- An item that isn't in scope is linked by path, with a reference-style
+  definition at the end of the doc. Don't add a `use` only for a link:
+  rustc reports it as unused.
+
+  ```rust
+  /// Turning the spec into a process is [`ToolEnv`]'s job.
+  ///
+  /// [`ToolEnv`]: crate::tool_env::ToolEnv
+  ```
 
 ### Doctests
 
@@ -336,7 +356,8 @@ mod tests {
   or more groups.
 - A `#[test]` fn takes the short form: one `///` line stating the behavior
   as a fact. Add detail lines only when the setup needs explaining.
-- Helper fns and fixtures inside `mod tests` get full item docs.
+- Helper fns and fixtures inside `mod tests` get full item docs. They sit
+  in a first nested `// == Fixtures ===` section, before the tests.
 
 ### Integration tests
 
