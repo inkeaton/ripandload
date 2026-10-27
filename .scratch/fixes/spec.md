@@ -21,6 +21,7 @@ Bugs first, then smells. Tickets that touch the same file run in sequence (`Bloc
 | 11 `job` names become Run and Process | `job.rs`, `job_run.rs`, `error.rs`, `tool_env.rs`, `app.rs`, GUI tabs, tests | none |
 | 12 Core `start`: one way to start a Run | new `start.rs`, `run.rs`, `error.rs`, `tests/run.rs`, `tests/ssh_target.rs` | 11 |
 | 13 The app starts Runs through `start` | `app.rs`, `upload_tab.rs`, `settings_tab.rs`, `run.rs` | 12 |
+| 14 The Run hands over its Outcome | `process.rs`, `run.rs`, `start.rs`, `error.rs`, `app.rs`, tests | 13 |
 
 ## Standing rules
 

@@ -1,7 +1,7 @@
 # 03 – The Comparison as the run's own outcome
 
 Type: grilling
-Status: open
+Status: resolved
 Blocked by: 02
 
 Part of `../map.md`. Candidate 3 of the review (Strong).
@@ -19,3 +19,17 @@ Should an Upload or Compare with Server return a finished Comparison itself, ins
 ## Resolution produces
 
 The agreed outcome interface and implementation tickets in `../fixes/issues/`, blocked by fix 05 and by ticket 02's implementation tickets.
+
+## Answer
+
+Grilled 2026-10-27. Yes: the Run builds its own outcome.
+
+- **Snapshot**: `start` (ticket 02) reads the Staging folder's contents for Upload and Compare with Server and hands them to the Run; `run` depends on `staging` (pure file reading, no GUI). An unreadable Staging folder becomes `CantStart::Staging`, so nothing starts; the string-typed snapshot error goes.
+- **Outcome**: `run::Outcome { Downloaded, Compared(Comparison), Uploaded(Comparison), Nothing }`, built when the last process ends (so the Comparison's time is right) and handed over once by `Run::take_outcome(&mut self) -> Option<Outcome>`. `is_download`, `upload_succeeded` and `to_send` leave the interface. The narrower `comparison()` was rejected: the app would still ask the Run its kind.
+- **The clear offer** stays in the app: `Uploaded` says what happened; reading `offer_clear_after_upload` and opening the dialog is the app's.
+- **Naming**: `process::Outcome` becomes `process::Exit`, leaving `Outcome` to the Run.
+- **Tests**: `Downloaded`/`Nothing`/`CantStart::Staging`/once-only in `tests/run.rs`; `Compared`/`Uploaded` and the file-arriving-mid-Run case in the `#[ignore]`d `tests/ssh_target.rs`. Ticket 04 can make `Compared` testable by feeding lines.
+
+Implementation: `../../fixes/issues/14-run-outcome.md` (core and app together, blocked by 13).
+
+For ticket 04: each per-kind handler would produce its `Outcome`; that's the hook between the two.
