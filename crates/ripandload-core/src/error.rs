@@ -178,17 +178,25 @@ pub enum StreamripConfigError {
         source: std::io::Error,
     },
 
-    /// A path in the Streamrip config couldn't be converted for the tools,
-    /// or rip couldn't be found to create a default Streamrip config.
-    ///
-    /// The paths are the Streamrip config's own, the Staging folder and
-    /// streamrip's databases. The message names only the default config.
+    /// rip couldn't be found, or the default Streamrip config's path couldn't
+    /// be converted for it, so a default Streamrip config can't be created.
     #[error("couldn't create a default Streamrip config")]
-    Tool(
-        /// Why the path couldn't be converted, or rip couldn't be found.
-        #[from]
+    SeedTool(
+        /// Why rip couldn't be found or the path couldn't be converted.
+        #[source]
         ToolError,
     ),
+
+    /// A path the Streamrip config names, the Staging folder or one of
+    /// streamrip's databases, couldn't be converted for the tools.
+    #[error("couldn't give rip the path {path}")]
+    ManagedPath {
+        /// The path, as the app knows it.
+        path: PathBuf,
+        /// Why the path couldn't be converted.
+        #[source]
+        source: ToolError,
+    },
 
     /// rip was found but couldn't be started to create a default Streamrip
     /// config.

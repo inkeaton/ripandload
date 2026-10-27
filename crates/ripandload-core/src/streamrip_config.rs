@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Value};
 
 use crate::command;
-use crate::error::{StreamripConfigError, ToolError};
+use crate::error::StreamripConfigError;
 use crate::settings::{Settings, open_private};
 use crate::tool_env::ToolEnv;
 use crate::wsl_output::decode_tool_output;
@@ -117,8 +117,10 @@ pub enum Seeded {
 ///   TOML.
 /// - [`StreamripConfigError::Write`] if the Streamrip config or its folder
 ///   can't be written.
-/// - [`StreamripConfigError::Tool`] if a path can't be converted for the
-///   tools, or `rip` can't be found to create the default.
+/// - [`StreamripConfigError::SeedTool`] if `rip` can't be found to create
+///   the default, or its path can't be converted for the tools.
+/// - [`StreamripConfigError::ManagedPath`] if the Staging folder or the
+///   databases' folder can't be converted for the tools.
 /// - [`StreamripConfigError::SeedSpawn`] if `rip` can't be started.
 /// - [`StreamripConfigError::SeedFailed`] if `rip` fails or leaves no file.
 ///   Anything it half wrote is removed, so the next call seeds again.
@@ -239,8 +241,8 @@ pub fn qobuz_app_id(config: &Path) -> Option<String> {
 /// - [`StreamripConfigError::Read`] if `personal` can't be read.
 /// - [`StreamripConfigError::Write`] if the folder or the copy can't be
 ///   written.
-/// - [`StreamripConfigError::Tool`] if `config` can't be converted for the
-///   tools, or `rip` can't be found.
+/// - [`StreamripConfigError::SeedTool`] if `config` can't be converted for
+///   the tools, or `rip` can't be found.
 /// - [`StreamripConfigError::SeedSpawn`] if `rip` can't be started.
 /// - [`StreamripConfigError::SeedFailed`] if `rip` fails or leaves no file.
 ///   The error holds its trimmed stderr, or its exit status when stderr is
@@ -266,9 +268,14 @@ fn seed(
         return Ok(Seeded::FromPersonal);
     }
 
-    let spec = command::seed_config_spec(&tool_env.tool_path(config)?);
+    let spec = command::seed_config_spec(
+        &tool_env
+            .tool_path(config)
+            .map_err(StreamripConfigError::SeedTool)?,
+    );
     let output = tool_env
-        .command(&spec)?
+        .command(&spec)
+        .map_err(StreamripConfigError::SeedTool)?
         .output()
         .map_err(|source| StreamripConfigError::SeedSpawn { source })?;
     if !output.status.success() || !config.is_file() {
@@ -303,7 +310,7 @@ fn seed(
 ///
 /// # Errors
 ///
-/// The error from [`ToolEnv::tool_path`] if the Staging folder or `db_dir`
+/// [`StreamripConfigError::ManagedPath`] if the Staging folder or `db_dir`
 /// can't be converted for the tools. `doc` is then left as it was, since
 /// the paths are converted before any key is written.
 fn apply(
@@ -311,10 +318,18 @@ fn apply(
     settings: &Settings,
     db_dir: &Path,
     tool_env: &ToolEnv,
-) -> Result<(), ToolError> {
-    let staging = tool_env.tool_path(&settings.staging_folder)?;
-    let downloads_db = tool_env.tool_path(&db_dir.join("downloads.db"))?;
-    let failed_db = tool_env.tool_path(&db_dir.join("failed_downloads.db"))?;
+) -> Result<(), StreamripConfigError> {
+    let convert = |path: &Path| {
+        tool_env
+            .tool_path(path)
+            .map_err(|source| StreamripConfigError::ManagedPath {
+                path: path.to_owned(),
+                source,
+            })
+    };
+    let staging = convert(&settings.staging_folder)?;
+    let downloads_db = convert(&db_dir.join("downloads.db"))?;
+    let failed_db = convert(&db_dir.join("failed_downloads.db"))?;
 
     set_managed(doc, "qobuz", "use_auth_token", true);
     set_managed(doc, "qobuz", "email_or_userid", &settings.qobuz.user_id);
@@ -376,6 +391,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), StreamripConfigError> 
 #[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 mod tests {
     use super::*;
+    use crate::error::ToolError;
 
     // == Fixtures =============================================================
 
@@ -528,7 +544,14 @@ mod tests {
             &wsl,
         )
         .unwrap_err();
-        assert!(matches!(err, ToolError::NotReachableFromWsl { .. }));
+        assert!(matches!(
+            &err,
+            StreamripConfigError::ManagedPath {
+                source: ToolError::NotReachableFromWsl { .. },
+                ..
+            }
+        ));
+        assert_eq!(err.to_string(), r"couldn't give rip the path \\nas\music");
     }
 
     /// Natively, the Staging folder and databases are written unchanged.

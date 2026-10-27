@@ -1,6 +1,6 @@
 # 02 – Streamrip config error headline
 
-Status: ready-for-agent
+Status: done
 Blocked by: none
 
 Part of `../spec.md`. First noted in `../../doc-comments/issues/07-sources-and-errors.md`.
