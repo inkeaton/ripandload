@@ -11,3 +11,7 @@ Uses the five default triage labels (`needs-triage`, `needs-info`, `ready-for-ag
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Code style
+
+Comments follow `docs/style/comments.md` and its Rust adaptation `docs/style/comments-rust.md`; read both before writing or rewriting comments. Run `dev/check.sh` before committing: it runs fmt, clippy with the doc lints, rustdoc, the tests and the comment check, warnings denied.

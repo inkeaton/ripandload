@@ -27,11 +27,11 @@ Two agreed comment style guides in the repo: `docs/style/comments.md` (code-agno
 - [Pilot conversion of command.rs](issues/04-pilot-command-rs.md): the guide holds up. Fixes now in the guides: topic sections may stand in for "Public API"; `# Returns` folds only when the summary line states every case; out-of-scope links use reference-style definitions, never a `use` added only for a link; long `text` lines wrap with a 4-space continuation; test fixtures go in a first "Fixtures" section. The guides target modules being written; comments-only conversion is the special case. `command.rs` (about 600 lines) didn't need a split.
 
 - [Enforcing the style with lints](issues/05-enforcement.md): the full Tooling-table lint set is on at `warn` in `[workspace.lints]`, with `check-private-items = true`, and `needless_return` is the only lint allowed. Test code allows `missing_panics_doc` on `mod tests` / `tests/*.rs`, now in the guide. `dev/check.sh` denies warnings and adds an awk check for column 80 and divider shape. There's no CI. 399 warnings at switch-on, 0 in `command.rs`.
+- [Slicing the rollout](issues/06-rollout-slicing.md): eight topic-group tickets, 07–14, each a `src` module with its `tests/*.rs` file. They run bottom-up in sequence (each blocked by the one before) and end with the GUI. Big files are documented as they are and flagged for a later split if needed. `AGENTS.md` now points at the guides and `dev/check.sh`. A ticket is done when its files have no clippy, rustdoc or `comments` hits and it passes a Standards review.
 
 ## Not yet specified
 
 - How the guides stay alive after rollout: whether `/code-review`'s Standards axis should cite them, and whether new-file templates or snippets are worth having. Sharpens once enforcement is decided.
-- What to do with files the pilot or rollout shows are too big to section well with dividers (`app.rs`, `command.rs`): document as-is, or flag for a later split. Depends on what the pilot reveals.
 
 ## Out of scope
 
