@@ -406,7 +406,7 @@ fn default_staging_folder() -> PathBuf {
     let music =
         directories::UserDirs::new().and_then(|dirs| dirs.audio_dir().map(Path::to_path_buf));
     let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
-    return staging_folder_in(music.as_deref(), home.as_deref());
+    return staging_folder_from(music.as_deref(), home.as_deref());
 }
 
 /// Returns the Staging folder to use, given the folders the OS names.
@@ -415,7 +415,7 @@ fn default_staging_folder() -> PathBuf {
 ///
 /// - `music`: the user's Music folder, if the OS names one.
 /// - `home`: the user's home folder, if the OS names one.
-fn staging_folder_in(music: Option<&Path>, home: Option<&Path>) -> PathBuf {
+fn staging_folder_from(music: Option<&Path>, home: Option<&Path>) -> PathBuf {
     return music.or(home).unwrap_or(Path::new("")).join("ripandload");
 }
 
@@ -466,14 +466,14 @@ mod tests {
         let music = Path::new("/home/a/Music");
         let home = Path::new("/home/a");
         assert_eq!(
-            staging_folder_in(Some(music), Some(home)),
+            staging_folder_from(Some(music), Some(home)),
             Path::new("/home/a/Music/ripandload")
         );
         assert_eq!(
-            staging_folder_in(None, Some(home)),
+            staging_folder_from(None, Some(home)),
             Path::new("/home/a/ripandload")
         );
-        assert_eq!(staging_folder_in(None, None), Path::new("ripandload"));
+        assert_eq!(staging_folder_from(None, None), Path::new("ripandload"));
     }
 
     // == Fixtures =============================================================

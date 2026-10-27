@@ -36,25 +36,8 @@ use crate::wording::plural;
 /// How often the window repaints while a run is going, to show new output.
 const JOB_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Reads what's in the Staging folder for a run about to start.
-///
-/// The Comparison is built from this when the run ends, so a file that
-/// arrives meanwhile isn't counted as on the Server. A folder that can't be
-/// read doesn't stop the run; the status bar says why when it ends.
-///
-/// # Errors
-///
-/// The error chain of [`StagingContents::read`], as the status bar shows it.
-fn read_staging_at_start(folder: &Path) -> Result<StagingContents, String> {
-    return StagingContents::read(folder).map_err(|err| error_chain(&err));
-}
-
 /// The status for a run that needs a Server when no active one is set.
 const NO_SERVER: &str = "No Server configured.";
-
-/// The status, and the hover text of a disabled button, for a run that needs
-/// a Server whose host and music folder are still empty.
-const SERVER_NOT_SET_UP: &str = "Set the Server's host and music folder first.";
 
 // == The app ==================================================================
 
@@ -234,8 +217,8 @@ impl RipAndLoadApp {
             self.status = NO_SERVER.into();
             return;
         };
-        if !server.is_set_up() {
-            self.status = SERVER_NOT_SET_UP.into();
+        if let Some(missing) = server_missing(server) {
+            self.status = missing.into();
             return;
         }
         self.log.clear();
@@ -489,7 +472,8 @@ impl RipAndLoadApp {
             {
                 self.check_tools();
             }
-            let server_ready = self.settings.active_server().is_some_and(Server::is_set_up);
+            let missing = self.settings.active_server().and_then(server_missing);
+            let server_ready = self.settings.active_server().is_some() && missing.is_none();
             let mut test = ui
                 .add_enabled(
                     !self.job_running() && server_ready,
@@ -498,8 +482,8 @@ impl RipAndLoadApp {
                 .on_hover_text(
                     "Logs in to the Server and checks that the music folder is writable",
                 );
-            if !server_ready {
-                test = test.on_disabled_hover_text(SERVER_NOT_SET_UP);
+            if let Some(missing) = missing {
+                test = test.on_disabled_hover_text(missing);
             }
             if test.clicked() {
                 self.test_connection();
@@ -663,6 +647,38 @@ impl eframe::App for RipAndLoadApp {
         self.confirm_clear(&ctx);
         self.guard_close(&ctx);
     }
+}
+
+// == Helpers ==================================================================
+
+/// Reads what's in the Staging folder for a run about to start.
+///
+/// The Comparison is built from this when the run ends, so a file that
+/// arrives meanwhile isn't counted as on the Server. A folder that can't be
+/// read doesn't stop the run; the status bar says why when it ends.
+///
+/// # Errors
+///
+/// The error chain of [`StagingContents::read`], as the status bar shows it.
+fn read_staging_at_start(folder: &Path) -> Result<StagingContents, String> {
+    return StagingContents::read(folder).map_err(|err| error_chain(&err));
+}
+
+/// Says what a run that needs a Server is missing, if anything.
+///
+/// # Returns
+///
+/// `None` if `server` is set up. Otherwise the text for the status bar, and
+/// for the hover text of a disabled button, naming the empty field.
+fn server_missing(server: &Server) -> Option<&'static str> {
+    let host = server.host.trim().is_empty();
+    let folder = server.music_folder.trim().is_empty();
+    return match (host, folder) {
+        (false, false) => None,
+        (true, false) => Some("Set the Server's host first."),
+        (false, true) => Some("Set the Server's music folder first."),
+        (true, true) => Some("Set the Server's host and music folder first."),
+    };
 }
 
 // == Internal types ===========================================================

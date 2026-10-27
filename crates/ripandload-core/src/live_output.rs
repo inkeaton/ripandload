@@ -159,8 +159,9 @@ impl LiveOutput {
     ///
     /// # Panics
     ///
-    /// Doesn't panic: `done` is at most `row`, and `live_top` is at least
-    /// `done` whenever it is the smaller bound.
+    /// Doesn't panic: `done` is at most `row`, so the cursor can't go below
+    /// 0, and at most `live_top` when there is one, so `live_top` can't
+    /// either.
     fn take_finished(&mut self) -> Vec<String> {
         let done = self
             .live_top

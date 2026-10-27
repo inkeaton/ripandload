@@ -215,27 +215,29 @@ pub fn qobuz_app_id(config: &Path) -> Option<String> {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
         Err(source) => {
-            let err = StreamripConfigError::Read {
+            return warn_and_none(&StreamripConfigError::Read {
                 path: config.to_owned(),
                 source,
-            };
-            tracing::warn!("{}", error_chain(&err));
-            return None;
+            });
         }
     };
     let doc: DocumentMut = match text.parse() {
         Ok(doc) => doc,
         Err(source) => {
-            let err = StreamripConfigError::Parse {
+            return warn_and_none(&StreamripConfigError::Parse {
                 path: config.to_owned(),
                 source,
-            };
-            tracing::warn!("{}", error_chain(&err));
-            return None;
+            });
         }
     };
     let app_id = doc.get("qobuz")?.get("app_id")?.as_str()?.trim();
     (!app_id.is_empty()).then(|| app_id.to_owned())
+}
+
+/// Logs `err` as a warning and returns `None`, for [`qobuz_app_id`].
+fn warn_and_none(err: &StreamripConfigError) -> Option<String> {
+    tracing::warn!("{}", error_chain(err));
+    return None;
 }
 
 // == Rendering steps ==========================================================
