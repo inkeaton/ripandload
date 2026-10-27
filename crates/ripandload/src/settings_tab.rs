@@ -177,12 +177,14 @@ fn server(ui: &mut egui::Ui, settings: &mut Settings) {
 
     ui.label("SSH key");
     ui.horizontal(|ui| {
-        path_field(ui, &mut server.ssh_key, "~/.ssh/id_ed25519");
+        let mut key = server.ssh_key.clone().unwrap_or_default();
+        path_field(ui, &mut key, "~/.ssh/id_ed25519");
+        server.ssh_key = (!key.as_os_str().is_empty()).then_some(key);
         if ui.button("Browse…").clicked()
             && let Some(file) = rfd::FileDialog::new().pick_file()
         {
             adopt_distro(wsl_distro, &file);
-            server.ssh_key = file;
+            server.ssh_key = Some(file);
         }
     });
     ui.end_row();

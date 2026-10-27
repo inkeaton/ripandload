@@ -42,7 +42,7 @@ fn server() -> Server {
         user: "ripandload".into(),
         port: 2222,
         music_folder: "/music/ssh-target".into(),
-        ssh_key: target_dir().join("key"),
+        ssh_key: Some(target_dir().join("key")),
     }
 }
 
@@ -234,7 +234,7 @@ fn test_connection_with_a_wrong_key_says_it_cant_log_in() {
         .unwrap();
     assert!(made.success());
     let mut server = server();
-    server.ssh_key = key;
+    server.ssh_key = Some(key);
 
     let (run, log) = test_connection(&server);
     assert!(!run.succeeded());

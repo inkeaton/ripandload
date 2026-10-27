@@ -210,11 +210,14 @@ impl ToolEnv {
     /// from WSL.
     pub fn ssh_ready(&self, server: &Server) -> Result<(Server, Option<CommandSpec>), ToolError> {
         let mut server = server.clone();
-        if !self.is_wsl() || server.ssh_key.as_os_str().is_empty() {
+        if !self.is_wsl() {
             return Ok((server, None));
         }
-        let copy = command::sh_spec(COPY_SSH_KEY, &[&self.tool_path(&server.ssh_key)?]);
-        server.ssh_key = PathBuf::from(WSL_SSH_KEY);
+        let Some(key) = &server.ssh_key else {
+            return Ok((server, None));
+        };
+        let copy = command::sh_spec(COPY_SSH_KEY, &[&self.tool_path(key)?]);
+        server.ssh_key = Some(PathBuf::from(WSL_SSH_KEY));
         Ok((server, Some(copy)))
     }
 }
@@ -372,11 +375,12 @@ mod tests {
         }
     }
 
-    /// Returns a Server at `music.example.org` whose SSH key is at `key`.
-    fn server(key: &str) -> Server {
+    /// Returns a Server at `music.example.org` whose SSH key is at `key`, or
+    /// with no SSH key when `key` is `None`.
+    fn server(key: Option<&str>) -> Server {
         Server {
             host: "music.example.org".into(),
-            ssh_key: PathBuf::from(key),
+            ssh_key: key.map(PathBuf::from),
             ..Default::default()
         }
     }
@@ -596,8 +600,8 @@ mod tests {
     #[test]
     fn native_ssh_key_is_used_where_it_is() {
         let env = ToolEnv::Native { rip: None };
-        let (server, copy) = env.ssh_ready(&server("/home/a/.ssh/key")).unwrap();
-        assert_eq!(server.ssh_key, PathBuf::from("/home/a/.ssh/key"));
+        let (server, copy) = env.ssh_ready(&server(Some("/home/a/.ssh/key"))).unwrap();
+        assert_eq!(server.ssh_key, Some(PathBuf::from("/home/a/.ssh/key")));
         assert_eq!(copy, None);
     }
 
@@ -605,9 +609,9 @@ mod tests {
     #[test]
     fn wsl_copies_the_ssh_key_in_with_0600_first() {
         let (server, copy) = debian()
-            .ssh_ready(&server(r"C:\Users\a\.ssh\navidrome key"))
+            .ssh_ready(&server(Some(r"C:\Users\a\.ssh\navidrome key")))
             .unwrap();
-        assert_eq!(server.ssh_key, PathBuf::from("~/.ssh/ripandload_key"));
+        assert_eq!(server.ssh_key, Some(PathBuf::from("~/.ssh/ripandload_key")));
         assert_eq!(server.host, "music.example.org");
         let copy = copy.unwrap();
         assert_eq!(copy.program, Tool::Sh);
@@ -628,8 +632,8 @@ mod tests {
     /// Inside WSL, a Server without an SSH key has nothing to copy.
     #[test]
     fn wsl_without_an_ssh_key_copies_nothing() {
-        let (server, copy) = debian().ssh_ready(&server("")).unwrap();
-        assert_eq!(server.ssh_key, PathBuf::new());
+        let (server, copy) = debian().ssh_ready(&server(None)).unwrap();
+        assert_eq!(server.ssh_key, None);
         assert_eq!(copy, None);
     }
 

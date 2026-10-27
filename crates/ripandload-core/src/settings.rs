@@ -18,7 +18,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::SettingsError;
 use crate::source::Source;
@@ -160,6 +160,8 @@ impl Settings {
     /// - [`SettingsProblem::EmptyFolderTemplate`] and
     ///   [`SettingsProblem::EmptyTrackTemplate`] if a Naming template is
     ///   empty or only whitespace.
+    /// - [`SettingsProblem::EmptyStagingFolder`] if the Staging folder is
+    ///   empty or only whitespace.
     /// - [`SettingsProblem::NoActiveServer`] if `active_server` is past the
     ///   list of Servers.
     /// - [`SettingsProblem::ServerPortZero`] if the active Server's port is 0.
@@ -187,6 +189,11 @@ impl Settings {
 
         if self.naming.track.trim().is_empty() {
             problems.push(SettingsProblem::EmptyTrackTemplate);
+        }
+
+        // Staging folder: whitespace alone counts as empty, like a template.
+        if self.staging_folder.to_string_lossy().trim().is_empty() {
+            problems.push(SettingsProblem::EmptyStagingFolder);
         }
 
         // Server: only the active one is used, so only it is checked.
@@ -329,9 +336,13 @@ pub struct Server {
     pub port: u16,
     /// The music folder's path on the Server, e.g. `/srv/music`.
     pub music_folder: String,
-    /// The SSH key's path on this machine; empty lets ssh try its default
-    /// keys and ssh-agent.
-    pub ssh_key: PathBuf,
+    /// The SSH key's path on this machine, or `None` to let ssh try its
+    /// default keys and ssh-agent.
+    ///
+    /// An empty `ssh_key` in the file, as older versions saved it, loads as
+    /// `None`.
+    #[serde(default, deserialize_with = "empty_path_is_none")]
+    pub ssh_key: Option<PathBuf>,
 }
 
 impl Server {
@@ -355,7 +366,7 @@ impl Default for Server {
             user: String::new(),
             port: 22,
             music_folder: String::new(),
-            ssh_key: PathBuf::new(),
+            ssh_key: None,
         }
     }
 }
@@ -380,6 +391,9 @@ pub enum SettingsProblem {
     /// The track Naming template is empty or only whitespace.
     #[error("the track Naming template is empty")]
     EmptyTrackTemplate,
+    /// The Staging folder is empty or only whitespace.
+    #[error("no Staging folder is set")]
+    EmptyStagingFolder,
     /// The active Server's index is past the list of Servers.
     #[error("no Server is configured")]
     NoActiveServer,
@@ -409,6 +423,22 @@ fn default_staging_folder() -> PathBuf {
 /// - `home`: the user's home folder, if the OS names one.
 fn staging_folder_from(music: Option<&Path>, home: Option<&Path>) -> PathBuf {
     return music.or(home).unwrap_or(Path::new("")).join("ripandload");
+}
+
+/// Deserializes an optional path, reading an empty one as `None`.
+///
+/// For a `#[serde(deserialize_with)]` on an `Option<PathBuf>` field, so that
+/// an empty string saved by an older version means the path isn't set.
+///
+/// # Errors
+///
+/// The error from [`Option::<PathBuf>::deserialize`] if the value isn't a
+/// path.
+fn empty_path_is_none<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<PathBuf>, D::Error> {
+    let path = Option::<PathBuf>::deserialize(deserializer)?;
+    return Ok(path.filter(|path| !path.as_os_str().is_empty()));
 }
 
 /// Opens `path` for writing, readable only by its owner on Unix.
@@ -531,6 +561,33 @@ mod tests {
         assert!(Settings::load(&path).unwrap().offer_clear_after_upload);
     }
 
+    /// An empty or missing SSH key loads as `None`, ssh's default keys.
+    #[test]
+    fn empty_or_missing_ssh_key_loads_as_none() {
+        let (_dir, path) = temp_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "[[servers]]\nhost = \"a\"\nssh_key = \"\"\n\n[[servers]]\nhost = \"b\"\n",
+        )
+        .unwrap();
+
+        let settings = Settings::load(&path).unwrap();
+        assert_eq!(settings.servers[0].ssh_key, None);
+        assert_eq!(settings.servers[1].ssh_key, None);
+    }
+
+    /// A set SSH key loads back unchanged.
+    #[test]
+    fn ssh_key_round_trips() {
+        let (_dir, path) = temp_path();
+        let mut settings = Settings::default();
+        settings.active_server_mut().unwrap().ssh_key = Some("/home/a/.ssh/key".into());
+
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path).unwrap(), settings);
+    }
+
     /// A file that isn't TOML fails to load with `SettingsError::Parse`.
     #[test]
     fn invalid_file_is_a_parse_error() {
@@ -591,6 +648,22 @@ mod tests {
                 SettingsProblem::EmptyTrackTemplate,
             ])
         );
+    }
+
+    /// An empty or whitespace-only Staging folder is a problem.
+    #[test]
+    fn blank_staging_folder_is_a_problem() {
+        for folder in ["", "  "] {
+            let settings = Settings {
+                staging_folder: PathBuf::from(folder),
+                ..Default::default()
+            };
+            assert_eq!(
+                settings.validate(),
+                Err(vec![SettingsProblem::EmptyStagingFolder]),
+                "{folder:?}"
+            );
+        }
     }
 
     /// An active Server index past the list of Servers is a problem.

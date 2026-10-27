@@ -392,8 +392,8 @@ fn shell_quote(text: &str) -> String {
 /// ssh-agent.
 fn ssh_options(server: &Server) -> Vec<String> {
     let mut options = Vec::new();
-    if !server.ssh_key.as_os_str().is_empty() {
-        options.extend(["-i".to_owned(), server.ssh_key.display().to_string()]);
+    if let Some(key) = &server.ssh_key {
+        options.extend(["-i".to_owned(), key.display().to_string()]);
     }
     options.extend(
         [
@@ -426,7 +426,7 @@ mod tests {
             user: "fance".into(),
             port: 21,
             music_folder: "/srv/subsonic/Music".into(),
-            ssh_key: PathBuf::from("/home/mari/.ssh/navidrome_rsync_key"),
+            ssh_key: Some(PathBuf::from("/home/mari/.ssh/navidrome_rsync_key")),
         }
     }
 
@@ -628,7 +628,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
     #[test]
     fn rsync_quotes_a_key_path_with_spaces_for_its_remote_shell() {
         let mut server = server();
-        server.ssh_key = PathBuf::from("/home/a b/it's key");
+        server.ssh_key = Some(PathBuf::from("/home/a b/it's key"));
         let args = rsync_args(&server, Path::new("/staging"));
         assert!(
             args[4].starts_with("ssh -i '/home/a b/it''s key' -p 21 "),
@@ -641,7 +641,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
     #[test]
     fn rsync_without_a_key_or_user_uses_ssh_defaults() {
         let mut server = server();
-        server.ssh_key = PathBuf::new();
+        server.ssh_key = None;
         server.user = String::new();
         let args = rsync_args(&server, Path::new("/staging"));
         assert_eq!(
