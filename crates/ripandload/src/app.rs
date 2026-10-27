@@ -5,9 +5,10 @@
 //! progress bars while a Download shows them, and the open tab. The
 //! Download and Upload tabs only report what the user clicked, as an
 //! `Action`, and the Settings tab's buttons are drawn here. Either way this
-//! module starts the run asked for: Check tools, a Download, an Upload,
-//! Compare with Server or Test connection. Only one run happens at a time,
-//! and every run uses the Settings as edited, saved or not.
+//! module asks [`start::start`] for the run asked for: Check tools, a
+//! Download, an Upload, Compare with Server or Test connection. Only one run
+//! happens at a time, and every run uses the Settings as edited, saved or
+//! not.
 //!
 //! The app also owns its two confirmation dialogs: clearing the Staging
 //! folder, and quitting with unsaved Settings.
@@ -20,13 +21,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use eframe::egui;
-use ripandload_core::command;
 use ripandload_core::error::error_chain;
 use ripandload_core::run::Run;
-use ripandload_core::settings::{Server, Settings};
+use ripandload_core::settings::Settings;
 use ripandload_core::staging::{self, Comparison, StagingContents};
-use ripandload_core::streamrip_config::{self, Seeded};
-use ripandload_core::tool_env::ToolEnv;
+use ripandload_core::start::{self, Places, Request};
 
 use crate::download_tab::{self, DownloadForm};
 use crate::settings_tab;
@@ -35,9 +34,6 @@ use crate::wording::plural;
 
 /// How often the window repaints while a run is going, to show new output.
 const RUN_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-/// The status for a run that needs a Server when no active one is set.
-const NO_SERVER: &str = "No Server configured.";
 
 // == The app ==================================================================
 
@@ -72,6 +68,8 @@ pub struct RipAndLoadApp {
     saved_settings: Settings,
     /// Where Settings load from and save to; `None` without a config folder.
     settings_path: Option<PathBuf>,
+    /// Where a Download keeps the Streamrip config and seeds it from.
+    places: Places,
     /// Whether the "unsaved changes" dialog is open.
     confirming_close: bool,
     /// Whether the user chose to quit, letting the next close go through.
@@ -118,6 +116,7 @@ impl RipAndLoadApp {
             saved_settings: settings.clone(),
             settings,
             settings_path,
+            places: Places::standard(),
             confirming_close: false,
             close_anyway: false,
         }
@@ -125,132 +124,25 @@ impl RipAndLoadApp {
 
     // == Starting a run =======================================================
 
-    /// Starts Check tools, with a cleared log.
-    fn check_tools(&mut self) {
-        self.log.clear();
-        let run = Run::check_tools(ToolEnv::from_settings(&self.settings), &mut self.log);
-        self.start_run(run);
-    }
-
-    /// Writes the Streamrip config, then starts a Download of the form's URLs.
+    /// Starts the run `request` asks for, with the Settings as edited.
     ///
-    /// The config comes from the Settings as edited. Writing the config runs on
-    /// the UI thread. It's quick, except the very first time without a personal
-    /// streamrip config, when `rip` has to create a default config to start
-    /// from. The log says where a new config came from. If there's no config
-    /// folder, the config can't be written, or its path can't be translated to
-    /// the one `rip` sees, no Download starts and the status bar says why.
-    fn download(&mut self) {
-        let tool_env = ToolEnv::from_settings(&self.settings);
-        let Some(config) = streamrip_config::default_path() else {
-            self.status = "No config folder found; the Streamrip config can't be written.".into();
-            return;
-        };
-        let personal = streamrip_config::personal_path();
-        let seeded_from = match streamrip_config::render(
-            &config,
-            personal.as_deref(),
-            &self.settings,
-            &tool_env,
-        ) {
-            Ok(Seeded::AlreadyThere) => None,
-            Ok(Seeded::FromPersonal) => Some("your personal streamrip config"),
-            Ok(Seeded::FromRip) => Some("streamrip's defaults"),
-            Err(err) => {
-                tracing::error!(error = %error_chain(&err), "couldn't render the Streamrip config");
-                self.status = error_chain(&err);
-                self.log.clear();
-                self.log.push(format!("✗ {}", self.status));
+    /// [`start::start`] clears the log first. For a Download it also writes
+    /// the Streamrip config, on the UI thread: quick, except the very first
+    /// time without a personal streamrip config, when `rip` has to create a
+    /// default config to start from. An Upload or Compare with Server also
+    /// reads what's in the Staging folder now, for the Comparison. If the
+    /// run can't start, the log and the status bar say why.
+    fn start_run(&mut self, request: Request) {
+        let reads_staging = matches!(request, Request::Upload | Request::Compare);
+        let at_start = reads_staging.then(|| read_staging_at_start(&self.settings.staging_folder));
+        let run = match start::start(&self.settings, request, &self.places, &mut self.log) {
+            Ok(run) => run,
+            Err(cant) => {
+                self.status = error_chain(&cant);
                 return;
             }
         };
-        if let Some(from) = seeded_from {
-            self.log.clear();
-            self.log.push(format!(
-                "Created the Streamrip config at {} from {from}",
-                config.display()
-            ));
-        }
-
-        // The paths inside the Streamrip config are already as `rip` sees
-        // them, so the config's own path has to be too.
-        let config = match tool_env.tool_path(&config) {
-            Ok(config) => config,
-            Err(err) => {
-                self.status = error_chain(&err);
-                self.log.clear();
-                self.log.push(format!("✗ {}", self.status));
-                return;
-            }
-        };
-        self.log.clear();
-        let spec = command::download_spec(&config, &self.download.urls(), self.download.quality);
-        let run = Run::download(tool_env, spec, &mut self.log);
-        self.start_run(run);
-    }
-
-    /// Starts an Upload of the Staging folder to the active Server.
-    ///
-    /// Without an active Server, nothing starts and the status bar says so.
-    fn upload(&mut self) {
-        let Some(server) = self.settings.active_server() else {
-            self.status = NO_SERVER.into();
-            return;
-        };
-        self.log.clear();
-        self.staging_at_start = Some(read_staging_at_start(&self.settings.staging_folder));
-        let run = Run::upload(
-            ToolEnv::from_settings(&self.settings),
-            &self.settings.staging_folder,
-            server,
-            &mut self.log,
-        );
-        self.start_run(run);
-    }
-
-    /// Starts Test connection against the active Server.
-    ///
-    /// Without an active Server, or while its host or music folder is empty,
-    /// nothing starts and the status bar says so.
-    fn test_connection(&mut self) {
-        let Some(server) = self.settings.active_server() else {
-            self.status = NO_SERVER.into();
-            return;
-        };
-        if let Some(missing) = server_missing(server) {
-            self.status = missing.into();
-            return;
-        }
-        self.log.clear();
-        let run = Run::test_connection(
-            ToolEnv::from_settings(&self.settings),
-            server,
-            &mut self.log,
-        );
-        self.start_run(run);
-    }
-
-    /// Starts Compare with Server, which lists what an Upload would send.
-    ///
-    /// Without an active Server, nothing starts and the status bar says so.
-    fn compare(&mut self) {
-        let Some(server) = self.settings.active_server() else {
-            self.status = NO_SERVER.into();
-            return;
-        };
-        self.log.clear();
-        self.staging_at_start = Some(read_staging_at_start(&self.settings.staging_folder));
-        let run = Run::compare(
-            ToolEnv::from_settings(&self.settings),
-            &self.settings.staging_folder,
-            server,
-            &mut self.log,
-        );
-        self.start_run(run);
-    }
-
-    /// Makes `run` the current run, finishing it at once if it couldn't start.
-    fn start_run(&mut self, run: Run) {
+        self.staging_at_start = at_start;
         self.status = run.status();
         let finished = run.is_finished();
         self.run = Some(run);
@@ -470,23 +362,22 @@ impl RipAndLoadApp {
                 .on_hover_text("Runs rip --version and rsync --version")
                 .clicked()
             {
-                self.check_tools();
+                self.start_run(Request::CheckTools);
             }
-            let missing = self.settings.active_server().and_then(server_missing);
-            let server_ready = self.settings.active_server().is_some() && missing.is_none();
+            let server_ready = start::server(&self.settings).map(|_| ());
             let mut test = ui
                 .add_enabled(
-                    !self.run_going() && server_ready,
+                    !self.run_going() && server_ready.is_ok(),
                     egui::Button::new("Test connection"),
                 )
                 .on_hover_text(
                     "Logs in to the Server and checks that the music folder is writable",
                 );
-            if let Some(missing) = missing {
-                test = test.on_disabled_hover_text(missing);
+            if let Err(cant) = &server_ready {
+                test = test.on_disabled_hover_text(error_chain(cant));
             }
             if test.clicked() {
-                self.test_connection();
+                self.start_run(Request::TestConnection);
             }
         });
 
@@ -619,7 +510,15 @@ impl eframe::App for RipAndLoadApp {
                     run_going,
                     &self.settings.qobuz.auth_token,
                 ) {
-                    download_tab::Action::Download => self.download(),
+                    download_tab::Action::Download => self.start_run(Request::Download {
+                        urls: self
+                            .download
+                            .urls()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                        quality: self.download.quality,
+                    }),
                     download_tab::Action::Cancel => self.cancel_run(),
                     download_tab::Action::None => {}
                 }
@@ -628,14 +527,14 @@ impl eframe::App for RipAndLoadApp {
                 let run_going = self.run_going();
                 match upload_tab::show(
                     ui,
-                    self.settings.active_server(),
+                    start::server(&self.settings),
                     &self.settings.staging_folder,
                     &mut self.staging_scan,
                     self.comparison.as_ref(),
                     run_going,
                 ) {
-                    upload_tab::Action::Upload => self.upload(),
-                    upload_tab::Action::Compare => self.compare(),
+                    upload_tab::Action::Upload => self.start_run(Request::Upload),
+                    upload_tab::Action::Compare => self.start_run(Request::Compare),
                     upload_tab::Action::Cancel => self.cancel_run(),
                     upload_tab::Action::Clear => self.ask_to_clear(false),
                     upload_tab::Action::None => {}
@@ -662,23 +561,6 @@ impl eframe::App for RipAndLoadApp {
 /// The error chain of [`StagingContents::read`], as the status bar shows it.
 fn read_staging_at_start(folder: &Path) -> Result<StagingContents, String> {
     return StagingContents::read(folder).map_err(|err| error_chain(&err));
-}
-
-/// Says what a run that needs a Server is missing, if anything.
-///
-/// # Returns
-///
-/// `None` if `server` is set up. Otherwise the text for the status bar, and
-/// for the hover text of a disabled button, naming the empty field.
-fn server_missing(server: &Server) -> Option<&'static str> {
-    let host = server.host.trim().is_empty();
-    let folder = server.music_folder.trim().is_empty();
-    return match (host, folder) {
-        (false, false) => None,
-        (true, false) => Some("Set the Server's host first."),
-        (false, true) => Some("Set the Server's music folder first."),
-        (true, true) => Some("Set the Server's host and music folder first."),
-    };
 }
 
 // == Internal types ===========================================================

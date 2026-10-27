@@ -2,7 +2,7 @@
 //!
 //! [`start`] is the one way to start a Run. It clears the Log, works out
 //! everything the Run's kind needs from the Settings, builds its commands
-//! and hands them to [`Run::new`]. Whatever can go wrong before the first
+//! and hands them to `Run::new`. Whatever can go wrong before the first
 //! process spawns is a [`CantStart`], and no Run exists then; a Run that
 //! exists has spawned a process, or failed to spawn one.
 //!
@@ -10,7 +10,7 @@
 //! Settings, seeded on the first Download, and its path converted for `rip`.
 //!
 //! This module builds no command lines of its own (they come from
-//! [`command`]) and runs nothing past [`Run::new`]. It shows nothing either:
+//! [`command`]) and runs nothing past `Run::new`. It shows nothing either:
 //! the app puts a [`CantStart`] in the Status bar.
 
 use std::path::{Path, PathBuf};

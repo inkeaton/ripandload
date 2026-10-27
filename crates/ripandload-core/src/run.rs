@@ -27,14 +27,13 @@
 //! - `Cancelled.`: the current command was cancelled.
 
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 
 use crate::command::{self, CommandSpec, STREAMRIP_VERSION, Tool};
-use crate::error::{ToolError, error_chain};
+use crate::error::error_chain;
 use crate::live_output::LiveOutput;
 use crate::process::{Outcome, Process, ProcessEvent, Stream};
-use crate::settings::Server;
 use crate::tool_env::ToolEnv;
 
 /// ssh's exit code when it couldn't connect or log in.
@@ -121,115 +120,6 @@ pub struct Run {
 impl Run {
     // == Starting a run =======================================================
 
-    /// Starts Check tools: `rip --version`, then `rsync --version`.
-    ///
-    /// After `rip --version`, it checks that streamrip is the
-    /// [`STREAMRIP_VERSION`] the app is made for. Inside WSL, it first checks
-    /// that anything runs there at all, and looks for streamrip under pyenv
-    /// when `rip` isn't where Settings say.
-    ///
-    /// # Arguments
-    ///
-    /// - `tool_env`: where the tools run.
-    /// - `log`: the log, which gets the first command line, or why it
-    ///   couldn't start.
-    pub fn check_tools(tool_env: ToolEnv, log: &mut Vec<String>) -> Self {
-        let mut specs = command::version_specs();
-        if tool_env.is_wsl() {
-            specs.insert(0, command::wsl_check_spec());
-        }
-        Self::start(Kind::CheckTools, tool_env, Ok(specs), log)
-    }
-
-    /// Starts a Download: one `rip` run, its progress bars read as they come.
-    ///
-    /// # Arguments
-    ///
-    /// - `tool_env`: where `rip` runs.
-    /// - `spec`: the Download, from [`command::download_spec`].
-    /// - `log`: the log, which gets the command line, or why it couldn't
-    ///   start.
-    pub fn download(tool_env: ToolEnv, spec: CommandSpec, log: &mut Vec<String>) -> Self {
-        Self::start(Kind::Download, tool_env, Ok(vec![spec]), log)
-    }
-
-    /// Starts an Upload of the Staging folder to `server`.
-    ///
-    /// When the tools run inside WSL, the SSH key is copied there first, as
-    /// [`ToolEnv::ssh_ready`] decides. If the key or `staging` can't be
-    /// reached from WSL, the run logs why and starts nothing.
-    ///
-    /// # Arguments
-    ///
-    /// - `tool_env`: where rsync runs.
-    /// - `staging`: the Staging folder, as the app sees it.
-    /// - `server`: the Server to Upload to.
-    /// - `log`: the log, which gets the first command line, or why it
-    ///   couldn't start.
-    pub fn upload(
-        tool_env: ToolEnv,
-        staging: &Path,
-        server: &Server,
-        log: &mut Vec<String>,
-    ) -> Self {
-        let specs = tool_env.ssh_ready(server).and_then(|(server, copy_key)| {
-            let staging = tool_env.tool_path(staging)?;
-            let upload = command::upload_spec(Path::new(&staging), &server);
-            Ok(copy_key.into_iter().chain([upload]).collect())
-        });
-        Self::start(Kind::Upload, tool_env, specs, log)
-    }
-
-    /// Starts Compare with Server: the Upload as a dry run.
-    ///
-    /// It finds out which files the Server doesn't have yet, from
-    /// [`command::compare_spec`]'s output; see [`Run::to_send`]. Like
-    /// [`Run::upload`], it copies the SSH key into WSL first if the tools
-    /// run there.
-    ///
-    /// # Arguments
-    ///
-    /// - `tool_env`: where rsync runs.
-    /// - `staging`: the Staging folder, as the app sees it.
-    /// - `server`: the Server to compare with.
-    /// - `log`: the log, which gets the first command line, or why it
-    ///   couldn't start.
-    pub fn compare(
-        tool_env: ToolEnv,
-        staging: &Path,
-        server: &Server,
-        log: &mut Vec<String>,
-    ) -> Self {
-        let specs = tool_env.ssh_ready(server).and_then(|(server, copy_key)| {
-            let staging = tool_env.tool_path(staging)?;
-            let compare = command::compare_spec(Path::new(&staging), &server);
-            Ok(copy_key.into_iter().chain([compare]).collect())
-        });
-        Self::start(Kind::Compare, tool_env, specs, log)
-    }
-
-    /// Starts Test connection: the ssh checks on `server`.
-    ///
-    /// The checks are [`command::test_connection_specs`]. Like
-    /// [`Run::upload`], it copies the SSH key into WSL first if the tools
-    /// run there.
-    ///
-    /// # Arguments
-    ///
-    /// - `tool_env`: where ssh runs.
-    /// - `server`: the Server to test.
-    /// - `log`: the log, which gets the first command line, or why it
-    ///   couldn't start.
-    pub fn test_connection(tool_env: ToolEnv, server: &Server, log: &mut Vec<String>) -> Self {
-        let specs = tool_env.ssh_ready(server).map(|(server, copy_key)| {
-            copy_key
-                .into_iter()
-                .chain(command::test_connection_specs(&server))
-                .collect()
-        });
-        Self::start(Kind::TestConnection, tool_env, specs, log)
-    }
-
     /// Starts a run of `kind` with the first of `specs` that can start.
     ///
     /// [`start::start`] calls this once it has built the commands. A run
@@ -246,7 +136,7 @@ impl Run {
     ///   commands couldn't start.
     ///
     /// [`start::start`]: crate::start::start
-    pub fn new(
+    pub(crate) fn new(
         kind: Kind,
         tool_env: ToolEnv,
         specs: Vec<CommandSpec>,
@@ -265,39 +155,6 @@ impl Run {
         };
         run.start_next(log);
         run
-    }
-
-    /// Starts a run of `kind`, or logs why its commands couldn't be built.
-    ///
-    /// Kept for the constructors above, which fix 13
-    /// (`.scratch/fixes/issues/13-app-uses-start.md`) removes once the app
-    /// starts every run through [`start::start`].
-    ///
-    /// # Arguments
-    ///
-    /// - `kind`: which run this is.
-    /// - `tool_env`: where the tools run.
-    /// - `specs`: the commands to run, in order, or the error that kept them
-    ///   from being built. The error is logged as a problem, and the run is
-    ///   over at once.
-    /// - `log`: the log, which gets the first command line, or the problem
-    ///   that kept anything from starting.
-    ///
-    /// [`start::start`]: crate::start::start
-    fn start(
-        kind: Kind,
-        tool_env: ToolEnv,
-        specs: Result<Vec<CommandSpec>, ToolError>,
-        log: &mut Vec<String>,
-    ) -> Self {
-        match specs {
-            Ok(specs) => Self::new(kind, tool_env, specs, log),
-            Err(err) => {
-                let mut run = Self::new(kind, tool_env, Vec::new(), log);
-                run.problem(log, format!("✗ {}", error_chain(&err)));
-                run
-            }
-        }
     }
 
     // == Polling and Cancel ===================================================

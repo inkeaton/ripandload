@@ -335,14 +335,6 @@ pub struct Server {
 }
 
 impl Server {
-    /// Returns whether there's enough to Upload or Test connection.
-    ///
-    /// That is a host and a music folder, neither of them only whitespace.
-    /// The user and SSH key may stay empty.
-    pub fn is_set_up(&self) -> bool {
-        !self.host.trim().is_empty() && !self.music_folder.trim().is_empty()
-    }
-
     /// Returns ssh's destination: `user@host`, or `host` without a user.
     ///
     /// With no user, ssh picks one itself, from its config or the local user.

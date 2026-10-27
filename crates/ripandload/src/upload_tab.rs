@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use ripandload_core::error::error_chain;
+use ripandload_core::error::{CantStart, error_chain};
 use ripandload_core::settings::Server;
 use ripandload_core::staging::{Comparison, MusicGroup, StagingContents};
 
@@ -101,13 +101,15 @@ pub enum Action {
 /// Draws the Upload tab into `ui` and returns what the user clicked.
 ///
 /// Upload and Compare with Server are enabled only when no run is going and
-/// the active Server has a host and a music folder. Clear… is enabled
-/// whenever no run is going, and Cancel only while one is.
+/// the active Server is set up; otherwise their hover text says what's
+/// missing. Clear… is enabled whenever no run is going, and Cancel only
+/// while one is.
 ///
 /// # Arguments
 ///
 /// - `ui`: where the tab is drawn.
-/// - `server`: the active Server, or `None` if there's none.
+/// - `server`: the active Server, or why it can't be used, from
+///   [`start::server`](ripandload_core::start::server).
 /// - `staging_folder`: the Staging folder, from Settings.
 /// - `scan`: the last read of the Staging folder, read again when stale.
 /// - `comparison`: the last Comparison, if any. One made of another Staging
@@ -121,13 +123,13 @@ pub enum Action {
 /// [`Action::None`].
 pub fn show(
     ui: &mut egui::Ui,
-    server: Option<&Server>,
+    server: Result<&Server, CantStart>,
     staging_folder: &Path,
     scan: &mut StagingScan,
     comparison: Option<&Comparison>,
     run_going: bool,
 ) -> Action {
-    let server_ready = server.is_some_and(Server::is_set_up);
+    let server = server.map_err(|cant| error_chain(&cant));
     let contents = scan.get(staging_folder);
     let comparison = comparison.filter(|comparison| comparison.is_for(staging_folder));
 
@@ -136,12 +138,9 @@ pub fn show(
         .spacing([12.0, 6.0])
         .show(ui, |ui| {
             ui.label("Server");
-            match server {
-                Some(server) if server_ready => ui.monospace(server_label(server)),
-                _ => ui.colored_label(
-                    ui.visuals().warn_fg_color,
-                    "⚠ set the Server's host and music folder in Settings",
-                ),
+            match &server {
+                Ok(server) => ui.monospace(server_label(server)),
+                Err(why) => ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {why}")),
             };
             ui.end_row();
 
@@ -173,14 +172,18 @@ pub fn show(
 
     ui.add_space(8.0);
     let mut action = Action::None;
+    // While the Server isn't set up, the buttons that need it say why.
+    let needs_server = |response: egui::Response| match &server {
+        Ok(_) => response,
+        Err(why) => response.on_disabled_hover_text(why),
+    };
     ui.horizontal(|ui| {
-        if ui
-            .add_enabled(!run_going && server_ready, egui::Button::new("Upload"))
+        let upload = ui
+            .add_enabled(!run_going && server.is_ok(), egui::Button::new("Upload"))
             .on_hover_text(
                 "Copies the Staging folder to the Server. Nothing on the Server is deleted.",
-            )
-            .clicked()
-        {
+            );
+        if needs_server(upload).clicked() {
             action = Action::Upload;
         }
         if ui
@@ -189,14 +192,13 @@ pub fn show(
         {
             action = Action::Cancel;
         }
-        if ui
+        let compare = ui
             .add_enabled(
-                !run_going && server_ready,
+                !run_going && server.is_ok(),
                 egui::Button::new("Compare with Server"),
             )
-            .on_hover_text("Asks the Server which files it already has. Sends nothing.")
-            .clicked()
-        {
+            .on_hover_text("Asks the Server which files it already has. Sends nothing.");
+        if needs_server(compare).clicked() {
             action = Action::Compare;
         }
         ui.separator();
