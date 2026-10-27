@@ -19,6 +19,7 @@ Each of the seven deepening candidates from the architecture review of 2026-10-2
 ## Decisions so far
 
 - **01 Glossary and run naming**: "Run" is the umbrella term; ten glossary entries added. Core `JobRun`/`Job` become `Run`/`Process`, GUI `job_*` become `*run*`, via fix 11, which blocks every later implementation ticket. See `issues/01-glossary-and-run-naming.md`.
+- **02 Run start-up**: new core `start(&Settings, Request, &Places, &mut Log) -> Result<Run, CantStart>`; every pre-spawn failure is a `CantStart` (Log cleared, `✗` line, status bar); one `server()` readiness check shared with the GUI; `Run` gets one crate-private constructor. Fix 12 (core) then 13 (app). See `issues/02-run-start-up.md`.
 
 ## Not yet specified
 
