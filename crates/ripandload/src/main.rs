@@ -1,4 +1,21 @@
-// On Windows, don't open a console window next to the GUI in release builds.
+//! The ripandload desktop app.
+//!
+//! ripandload downloads music from a Source with streamrip into the Staging
+//! folder, then Uploads that folder to a friend group's Navidrome Server.
+//! This binary is its GUI: one eframe window with a Download, an Upload and
+//! a Settings tab.
+//!
+//! This file only starts the program: it sets up logging, picks the
+//! renderer and opens the window. What the window shows and does is in
+//! `app` and the tab modules. Running the tools, Settings and the Streamrip
+//! config live in `ripandload_core`.
+//!
+//! # Environment
+//!
+//! - `RUST_LOG`: the log filter, `ripandload=info` when unset.
+//! - `RIPANDLOAD_RENDERER`: `wgpu` to draw with wgpu instead of OpenGL.
+
+// A release build on Windows opens no console window next to the GUI.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
@@ -10,6 +27,12 @@ use std::sync::Mutex;
 
 use ripandload_core::log_file;
 
+/// Starts logging, then runs the app's window until the user closes it.
+///
+/// # Errors
+///
+/// The error from [`eframe::run_native`] if the window or its renderer
+/// can't be created.
 fn main() -> eframe::Result {
     init_logging();
     tracing::info!(version = ripandload_core::VERSION, "starting ripandload");
@@ -29,9 +52,18 @@ fn main() -> eframe::Result {
     )
 }
 
-/// Logs to stderr and to `ripandload.log` in the platform data dir, the only
-/// place a release build on Windows can log to, since it has no console.
-/// Panics are logged too, for the same reason.
+/// Sends `tracing` output to stderr and to the log file, panics included.
+///
+/// The log file is [`log_file::LOG`] in [`log_file::default_dir`]. It's the
+/// only place a release build on Windows can log to, since it has no
+/// console, and that's why panics are logged too. Without a data folder, or
+/// when the file can't be opened, logging goes to stderr only, and a warning
+/// logged right after says why.
+///
+/// # Panics
+///
+/// Panics if a global `tracing` subscriber is already set, which only
+/// happens if this is called twice.
 fn init_logging() {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -71,8 +103,10 @@ fn init_logging() {
     }));
 }
 
-/// OpenGL (glow) by default: wgpu flickers and lags when resizing on Windows.
-/// Set `RIPANDLOAD_RENDERER=wgpu` to try the wgpu renderer instead.
+/// Returns wgpu if `RIPANDLOAD_RENDERER` is `wgpu`, else OpenGL (glow).
+///
+/// OpenGL is the default because wgpu flickers and lags when the window is
+/// resized on Windows.
 fn renderer_from_env() -> eframe::Renderer {
     match std::env::var("RIPANDLOAD_RENDERER").as_deref() {
         Ok("wgpu") => eframe::Renderer::Wgpu,

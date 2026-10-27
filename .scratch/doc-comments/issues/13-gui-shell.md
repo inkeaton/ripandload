@@ -1,7 +1,7 @@
 # 13 – Apply the comment style: GUI shell
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 12
 
 Part of `../map.md`. Slicing decided in `06-rollout-slicing.md`.
@@ -26,15 +26,23 @@ Comments only. Code changes are limited to pure moves of items into their sectio
 
 ## Acceptance
 
-- [ ] No clippy warnings in these files:
+- [x] No clippy warnings in these files:
   `cargo clippy --workspace --all-targets --message-format=short 2>&1 | grep -E '^(crates/ripandload/src/main\.rs|crates/ripandload/src/app\.rs):'` prints nothing.
-- [ ] No rustdoc warnings in these files:
+- [x] No rustdoc warnings in these files:
   `cargo doc --workspace --no-deps --document-private-items --message-format=short 2>&1 | grep -E '^(crates/ripandload/src/main\.rs|crates/ripandload/src/app\.rs):'` prints nothing.
-- [ ] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
-- [ ] `cargo fmt --all --check` and `cargo test --workspace` pass.
-- [ ] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
+- [x] No `comments` hits for these files from `dev/check.sh` (column 80, divider shape).
+- [x] `cargo fmt --all --check` and `cargo test --workspace` pass.
+- [x] Reviewed against both guides (`/code-review`, Standards axis): section order, Arguments/Returns content, and the summary-line wording, which no lint checks.
 
 ## Notes
 
 - Big files are documented as they are. If a file still reads badly with dividers, say so under Comments as a candidate for a later split; don't split it here.
 - Other files' warnings are out of scope. `dev/check.sh` stays red until ticket 14 is done.
+
+## Comments
+
+- Glossary gaps: "run" (one Check tools, Download, Upload, Compare with Server or Test connection; `JobRun` in code) has no entry, and the code calls it `job` (`job`, `start_job`, `poll_job`), which the glossary lists under _Avoid_ for Download. Docs say "run" throughout. "Check tools", "Test connection" and "Compare with Server" (noted in tickets 11 and 12) and "active Server" are used without entries.
+- No split needed. `app.rs` reads as the app type, then its `impl` in Starting up, Starting a run, Following a run, Clearing the Staging folder, Settings and Closing the window, then the `eframe::App` frame, then Internal types (`Tab`, `ClearPrompt`, moved there from the top). `ui()`'s tab dispatch is the densest part. `main.rs` is a single topic and has no dividers.
+- Step 2 had nothing to apply: neither file has a `mod tests`, and `crates/ripandload` has no `tests/`.
+- `main.rs`'s crate header names `app` in plain backticks: the crate root is public and `app` private, so it can't link it.
+- Code smell, not fixed here (comments only): `upload`, `test_connection` and `compare` repeat the same "no active Server" guard.
