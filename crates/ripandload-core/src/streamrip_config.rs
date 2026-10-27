@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Value};
 
 use crate::command;
-use crate::error::StreamripConfigError;
+use crate::error::{StreamripConfigError, error_chain};
 use crate::settings::{Settings, open_private};
 use crate::tool_env::ToolEnv;
 use crate::wsl_output::decode_tool_output;
@@ -207,10 +207,33 @@ pub fn set_managed(doc: &mut DocumentMut, table: &str, key: &str, value: impl In
 ///
 /// The `app_id`, trimmed, or `None` if the file is missing, unreadable or
 /// not valid TOML, or its `app_id` is missing, not a string, or still
-/// empty.
+/// empty. An unreadable or invalid file is logged as a warning, since it
+/// isn't the normal state before the first Download that a missing `app_id`
+/// is.
 pub fn qobuz_app_id(config: &Path) -> Option<String> {
-    let text = fs::read_to_string(config).ok()?;
-    let doc: DocumentMut = text.parse().ok()?;
+    let text = match fs::read_to_string(config) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(source) => {
+            let err = StreamripConfigError::Read {
+                path: config.to_owned(),
+                source,
+            };
+            tracing::warn!("{}", error_chain(&err));
+            return None;
+        }
+    };
+    let doc: DocumentMut = match text.parse() {
+        Ok(doc) => doc,
+        Err(source) => {
+            let err = StreamripConfigError::Parse {
+                path: config.to_owned(),
+                source,
+            };
+            tracing::warn!("{}", error_chain(&err));
+            return None;
+        }
+    };
     let app_id = doc.get("qobuz")?.get("app_id")?.as_str()?.trim();
     (!app_id.is_empty()).then(|| app_id.to_owned())
 }

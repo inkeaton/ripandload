@@ -250,8 +250,8 @@ pub struct QobuzAccess {
 /// Returns the [`Preview`] of `url`, asking its Source's API.
 ///
 /// A Deezer share link is followed to its real URL first, which takes one
-/// more request. Each request blocks for up to 10 seconds, so call this off
-/// the UI thread.
+/// more request. Each request blocks for up to 10 seconds, so this can take
+/// up to 20 for a share link. Call it off the UI thread.
 ///
 /// # Arguments
 ///

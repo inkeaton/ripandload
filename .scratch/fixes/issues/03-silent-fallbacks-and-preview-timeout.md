@@ -1,6 +1,6 @@
 # 03 – Silent fallbacks and the Preview timeout doc
 
-Status: ready-for-agent
+Status: done
 Blocked by: 02
 
 Part of `../spec.md`. Blocked by 02 only because both edit `streamrip_config.rs`.
@@ -21,3 +21,7 @@ Part of `../spec.md`. Blocked by 02 only because both edit `streamrip_config.rs`
 
 - [ ] A unit test for the Staging folder fallback where it can be reached (if `directories` can't be stubbed, say so under Comments).
 - [ ] `dev/check.sh` passes.
+
+## Comments
+
+The `qobuz_app_id` warning has no test: `tracing` output has no subscriber in the tests, so the log line is checked by reading. A missing file stays silent too, since `render` seeds it first.

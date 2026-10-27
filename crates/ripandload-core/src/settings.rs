@@ -398,12 +398,25 @@ pub enum SettingsProblem {
 
 // == Helpers ==================================================================
 
-/// Returns `~/Music/ripandload`, or plain `ripandload` with no Music folder.
+/// Returns `~/Music/ripandload`.
+///
+/// With no Music folder it is `~/ripandload`, and only with no home folder
+/// either the relative `ripandload`, which is then the working directory's.
 fn default_staging_folder() -> PathBuf {
-    directories::UserDirs::new()
-        .and_then(|dirs| dirs.audio_dir().map(Path::to_path_buf))
-        .unwrap_or_default()
-        .join("ripandload")
+    let music =
+        directories::UserDirs::new().and_then(|dirs| dirs.audio_dir().map(Path::to_path_buf));
+    let home = directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf());
+    return staging_folder_in(music.as_deref(), home.as_deref());
+}
+
+/// Returns the Staging folder to use, given the folders the OS names.
+///
+/// # Arguments
+///
+/// - `music`: the user's Music folder, if the OS names one.
+/// - `home`: the user's home folder, if the OS names one.
+fn staging_folder_in(music: Option<&Path>, home: Option<&Path>) -> PathBuf {
+    return music.or(home).unwrap_or(Path::new("")).join("ripandload");
 }
 
 /// Opens `path` for writing, readable only by its owner on Unix.
@@ -443,6 +456,25 @@ pub(crate) fn open_private(path: &Path) -> std::io::Result<fs::File> {
 #[allow(clippy::missing_panics_doc, reason = "a panic is how a test fails")]
 mod tests {
     use super::*;
+
+    // == Default Staging folder ===============================================
+
+    /// The Music folder is preferred, then the home folder, then a relative
+    /// path.
+    #[test]
+    fn staging_folder_falls_back_from_music_to_home_to_relative() {
+        let music = Path::new("/home/a/Music");
+        let home = Path::new("/home/a");
+        assert_eq!(
+            staging_folder_in(Some(music), Some(home)),
+            Path::new("/home/a/Music/ripandload")
+        );
+        assert_eq!(
+            staging_folder_in(None, Some(home)),
+            Path::new("/home/a/ripandload")
+        );
+        assert_eq!(staging_folder_in(None, None), Path::new("ripandload"));
+    }
 
     // == Fixtures =============================================================
 
