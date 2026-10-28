@@ -176,7 +176,8 @@ anything too, and names it. `if …` after a pattern is a *guard*: the arm only
 fits when the guard is also true. `match` is an expression, so the whole
 thing is the function's value.
 
-Seen in: [Compare: the end](pipelines/compare.md#6-the-end).
+Seen in: [Compare: the end](pipelines/compare.md#6-the-end),
+[extending the app](extending.md).
 
 ### Slice patterns
 
