@@ -293,7 +293,7 @@ It does four things.
 values and writes them back out fresh: comments, blank lines and key order
 are lost. `toml_edit` keeps the document as it was written, and changes only
 the values it's told to. The Streamrip config is a file the user may open
-and edit, so it must stay readable. → [crates](../crates.md)
+and edit, so it must stay readable. → [crates: toml_edit](../crates.md#toml_edit)
 
 ### 7. The managed keys
 

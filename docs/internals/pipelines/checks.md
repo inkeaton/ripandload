@@ -68,7 +68,7 @@ Two cases take one line each:
   That counts as a problem.
 - **rsync missing, natively.** The Log gets
   `` ✗ `rsync` wasn't found on PATH; install rsync: cannot find binary path ``,
-  from `ToolError::NotFound`. → [crates: which](../crates.md)
+  from `ToolError::NotFound`. → [crates: which](../crates.md#which)
 
 A is followed step by step below. B and C come after it, and only tell
 where they differ.
