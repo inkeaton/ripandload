@@ -20,7 +20,8 @@ those compile either way. The steps below include them.
 **Rehearsed.** Each walkthrough was followed on a throwaway branch, step by
 step, until `dev/check.sh` passed, and its diff touched exactly the files
 listed. The walkthrough for a new Setting was rehearsed against commit
-`d522556`. If the code has moved on since, the steps may need adjusting.
+`d522556`, and the one for a new Source against `db56b2a`. If the code has
+moved on since, the steps may need adjusting.
 
 ## A new Setting: streamrip's `max_connections`
 
@@ -106,6 +107,124 @@ The rehearsal's diff touched exactly the four files above: `settings.rs`,
 outside that diff. [Settings round-trip](pipelines/settings.md) uses
 `max_connections` as its example of a key the user added by hand. A real
 change would give that example another key.
+
+## A new Source: Tidal
+
+The example: let the user paste Tidal URLs. streamrip 2.2.0 downloads from
+Tidal, and its URLs look like `https://tidal.com/browse/album/251380836`
+or `https://listen.tidal.com/track/251380837`.
+
+**Tidal has no Credentials to paste.** Qobuz and Deezer give the user a
+token or a cookie to copy into the Settings. Tidal doesn't. streamrip's
+`[tidal]` section holds `user_id`, `country_code`, `access_token`,
+`refresh_token` and `token_expiry`, all marked "Do not change". `rip` fills
+them in itself: with no access token, it prints a link, opens the browser,
+and waits up to five minutes for the user to log in there. It then
+refreshes the access token every week.
+
+So the app must leave those keys alone. If `apply` managed them, every
+Download would overwrite streamrip's fresh tokens with stale ones. The
+walkthrough manages only Tidal's Quality, and lets the first Tidal Download
+log in. That needs nothing from the app: `rip` reads no stdin for it, and
+its line `Go to https://link.tidal.com/… to log into Tidal within 5
+minutes.` lands in the Log like any other.
+
+The Preview reads the access token from the Streamrip config, the way Qobuz
+Previews read the `app_id`. Until the first Tidal Download, a Tidal URL
+says `no preview until the first Tidal Download`.
+
+1. **`crates/ripandload-core/src/source.rs`, `Source`.** Add `Tidal`, and
+   rewrite the doc comment that says Tidal isn't a Source. Recognise its
+   hosts in `from_url` (`tidal.com` and its subdomains), give it
+   `quality_levels` `0..=3`, and name it in `Display`. Test its URLs and the
+   Quality levels it shares with Qobuz. Also fix `other_sources_are_none`,
+   which uses a Tidal URL as its example of *no* Source.
+
+   Check that `quality_label` still reads right: it names levels 0 and 1
+   "MP3", and Tidal's are AAC. The rehearsal left the labels as they are.
+   → [URL recognition: recognising the Source](pipelines/url-recognition.md#1-recognising-the-source)
+
+2. **`crates/ripandload-core/src/preview.rs` and `error.rs`.** Read the URL
+   in `parse`:
+
+   ```rust
+   Source::Tidal => match segments[..] {
+       ["browse", kind, id] | [kind, id] => (kind, id),
+       _ => return None,
+   },
+   ```
+
+   Add a `TidalAccess` struct (the access token and the country code) and
+   a `TIDAL_API` base. `fetch` takes a `&TidalAccess` next to the
+   `&QobuzAccess`, and its Tidal arm asks for `albums/<id>` with
+   `countryCode` and an `Authorization: Bearer` header. With no access
+   token it returns a new `PreviewError::NoTidalLogin`, "no preview until
+   the first Tidal Download". Add `describe` arms: Tidal's album and track
+   answers keep the names where Deezer's do. Update the
+   `PreviewError::Unsupported` doc, which names the Sources. Test the URL
+   shapes and `describe`, with fixtures `tidal-album.json` and
+   `tidal-track.json` in `crates/ripandload-core/tests/fixtures/preview/`.
+   The rehearsal wrote them by hand from the API's shape. Record real ones
+   if you can. Also fix `other_urls_have_no_link`, which lists a Tidal URL
+   as "not a Source at all".
+
+   Tidal playlist IDs hold hyphens, which `parse` refuses, so playlists get
+   no Preview.
+   → [URL recognition: reading the URL](pipelines/url-recognition.md#4-reading-the-url),
+   [asking the API](pipelines/url-recognition.md#5-asking-the-api) and
+   [naming it](pipelines/url-recognition.md#6-naming-it)
+
+3. **`crates/ripandload-core/src/streamrip_config.rs`, `tidal_access`.** A
+   reader next to `qobuz_app_id`, giving the `[tidal]` access token and
+   country code, empty when they're missing.
+   → [URL recognition: starting a lookup thread](pipelines/url-recognition.md#3-starting-a-lookup-thread)
+
+4. **`crates/ripandload/src/download_tab.rs`, `Previews`.** Cache a
+   `TidalAccess` per round, as `qobuz_access` is. Read it through a
+   `read_tidal_access` field, so tests can replace it, clear it in `retry`,
+   and pass it to `fetch`. Add `NoTidalLogin` to the errors `state_of`
+   shows as they are, and to its test. Change the two texts that name the
+   Sources: the label above the text box, and the
+   `⚠ not a Qobuz or Deezer URL` line.
+   → [URL recognition: before the first Qobuz Download](pipelines/url-recognition.md#example-d-before-the-first-qobuz-download)
+
+5. **`crates/ripandload-core/src/settings.rs`, `QualityDefaults`.** Add
+   `tidal`, defaulting to 3, streamrip's own default. Add
+   `SettingsProblem::TidalQualityOutOfRange`, its check in `validate`, and
+   its line in the Quality range test. Test that an older Settings file's
+   `[quality]` table, without `tidal`, still loads: `#[serde(default)]` on
+   `QualityDefaults` fills it in. No Credentials struct: there are none.
+   → [a new Setting](#a-new-setting-streamrips-max_connections), steps 1
+   and 2
+
+6. **`streamrip_config.rs`, `apply`.** One `set_managed` line, for
+   `[tidal] quality` and nothing else, and its line in the module doc's
+   `# Managed keys` list. In `crates/ripandload-core/tests/streamrip_config.rs`,
+   set the `settings` helper's Tidal Quality to 1 (the fixture has 3),
+   assert it in the seeding test, and move
+   `unmanaged_keys_and_comments_survive` off `[tidal] quality`, its example
+   of an unmanaged key, to one such as `[database] downloads_enabled`.
+   → [a new Setting](#a-new-setting-streamrips-max_connections), steps 3
+   and 4
+
+7. **`crates/ripandload/src/settings_tab.rs`.** A Quality row,
+   `level_picker(ui, Source::Tidal, &mut settings.quality.tidal)`, and a
+   row under Credentials saying that streamrip asks the user to log in on
+   the first Tidal Download.
+   → [a new Setting](#a-new-setting-streamrips-max_connections), step 5
+
+8. **Docs.** The user README names the Sources four times, and explains
+   Credentials. The glossary's Source entry already lists Tidal. Its
+   Credentials entry gets a sentence saying Tidal has none in the Settings.
+
+The rehearsal's diff touched exactly these files: `source.rs`, `preview.rs`,
+`error.rs`, `streamrip_config.rs` and the integration test of the same
+name, `settings.rs`, `download_tab.rs`, `settings_tab.rs`, `README.md` and
+`GLOSSARY.md`, plus the two new fixtures.
+
+The access token lasts a week, and streamrip refreshes it while a Download
+runs. A Preview made with an out-of-date token fails, and says
+`no preview`, like any other failed lookup.
 
 ## Before you commit
 
