@@ -70,9 +70,6 @@ Two cases take one line each:
   `` ✗ `rsync` wasn't found on PATH; install rsync: cannot find binary path ``,
   from `ToolError::NotFound`. → [crates: which](../crates.md#which)
 
-A is followed step by step below. B and C come after it, and only tell
-where they differ.
-
 ### Example A, step by step
 
 #### 1. The click
@@ -357,9 +354,6 @@ Inside WSL, the SSH key is copied into WSL first, as for a Compare.
 → [Compare: example B](compare.md#example-b-the-same-compare-inside-wsl)
 And if ssh isn't installed inside WSL, the first check exits with 127, and
 the Log says `ssh isn't installed inside WSL; follow the WSL setup steps`.
-
-A is followed step by step below. B and C come after it, and only tell
-where they differ.
 
 ### Example A, step by step
 

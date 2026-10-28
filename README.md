@@ -89,6 +89,8 @@ Start with the two buttons on the Settings tab. They use the Settings as they ar
 
 ## Building
 
+How the code works, for anyone changing it, is in [docs/internals/](docs/internals/README.md).
+
 ### Linux
 
 ```sh

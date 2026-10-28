@@ -46,9 +46,6 @@ sequenceDiagram
 - **D**, example A pasted before the first Qobuz Download. The lookup fails
   at step 5.
 
-A is followed step by step below. B, C and D come after it, and only tell
-where they differ.
-
 ## Example A, step by step
 
 ### 1. Recognising the Source

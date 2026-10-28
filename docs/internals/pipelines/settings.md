@@ -54,9 +54,6 @@ sequenceDiagram
 - **D**, a Settings file that isn't valid TOML. The app starts on the
   defaults.
 
-A is followed step by step below. B, C and D come after it, and only tell
-where they differ.
-
 ## Part 1: the Settings file and the app
 
 ### 1. Loading

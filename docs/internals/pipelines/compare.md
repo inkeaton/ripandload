@@ -50,9 +50,6 @@ sequenceDiagram
 - **C**, a Server that can't be reached. The Compare fails, and the Upload
   tab keeps what it showed before.
 
-A is followed step by step below. B and C come after it, and only tell
-where they differ.
-
 ## Example A, step by step
 
 The Settings for A:

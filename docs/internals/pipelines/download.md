@@ -53,9 +53,6 @@ sequenceDiagram
   edited by hand and isn't valid TOML any more.
 - **D**, B cancelled halfway.
 
-A is followed step by step below. B, C and D come after it, and only tell
-where they differ.
-
 ## Example A, step by step
 
 ### 1. The click

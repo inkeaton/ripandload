@@ -50,9 +50,6 @@ sequenceDiagram
 - **C**, a file copied into the Staging folder while the Upload runs. It
   still reads "to upload" afterwards.
 
-A is followed step by step below. B and C come after it, and only tell
-where they differ.
-
 Two more cases go exactly as for Compare with Server:
 
 - **Inside WSL**, the SSH key is copied into WSL first, and the Staging
