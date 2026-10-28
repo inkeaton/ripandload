@@ -20,8 +20,9 @@ those compile either way. The steps below include them.
 **Rehearsed.** Each walkthrough was followed on a throwaway branch, step by
 step, until `dev/check.sh` passed, and its diff touched exactly the files
 listed. The walkthrough for a new Setting was rehearsed against commit
-`d522556`, and the one for a new Source against `db56b2a`. If the code has
-moved on since, the steps may need adjusting.
+`d522556`, the one for a new Source against `db56b2a`, and the one for a
+new Run kind against `2450bb9`. If the code has moved on since, the steps
+may need adjusting.
 
 ## A new Setting: streamrip's `max_connections`
 
@@ -225,6 +226,122 @@ name, `settings.rs`, `download_tab.rs`, `settings_tab.rs`, `README.md` and
 The access token lasts a week, and streamrip refreshes it while a Download
 runs. A Preview made with an out-of-date token fails, and says
 `no preview`, like any other failed lookup.
+
+## A new Run kind: Free space
+
+The example: a button on the Upload tab that asks the Server how much room
+its music folder has left, and shows the answer. It's a Run like Test
+connection: one ssh command, `df -Pk` on the music folder. Unlike Test
+connection, it leaves something for the app to catch up with, so it gets an
+Outcome of its own, `Outcome::FreeSpace(bytes)`.
+
+1. **`crates/ripandload-core/src/command.rs`.** Add `free_space_spec`, built
+   as `test_connection_specs` is: `ssh_options`, `--`, the destination, and
+   one remote command, `df -Pk <music folder>`. The music folder must be
+   quoted for the Server's shell, with a leading `~/` left outside the
+   quotes, which `test_connection_specs` did inline: move that into a
+   `remote_folder` helper both use. Add `df_available`, which reads the
+   fourth column of df's line as KiB and gives bytes, `None` for the
+   header. Test the command line and the parser. Also update the module
+   doc's list of every Run's steps, and `Tool::Ssh`'s doc, which says what
+   ssh runs.
+   → [Compare: the command line](pipelines/compare.md#3-the-command-line)
+   and [Test connection](pipelines/checks.md#part-2-test-connection)
+
+2. **A new file, `free_space.rs`, in `crates/ripandload-core/src/run/`.** The kind:
+   `FreeSpace::new(tool_env, server)` runs `ssh_ready`, then puts the key
+   copy, if any, in front of `free_space_spec`. The `impl Kind` is where
+   the kind's behaviour lives:
+
+   ```rust
+   impl Kind for FreeSpace {
+       fn name(&self) -> &'static str {
+           return "Free space";
+       }
+
+       fn on_line(&mut self, _spec: &CommandSpec, line: String) -> Vec<Note> {
+           if let Some(bytes) = command::df_available(&line) {
+               self.available = Some(bytes);
+           }
+           return vec![Note::Line(line)];
+       }
+
+       fn on_failure(&mut self, _spec: &CommandSpec, code: i32, _wsl: bool) -> Failure {
+           return Failure {
+               hint: server::ssh_hint(code),
+               ..Failure::default()
+           };
+       }
+
+       fn outcome(&mut self, succeeded: bool) -> Outcome {
+           match self.available {
+               Some(bytes) if succeeded => return Outcome::FreeSpace(bytes),
+               _ => return Outcome::Nothing,
+           }
+       }
+   }
+   ```
+
+   Every other hook keeps the trait's default: stop at the first problem,
+   read lines rather than raw bytes, say "all good" on success. Unit-test
+   the Outcome and the hint, as `run/test_connection.rs` does.
+   → [Download: each frame](pipelines/download.md#7-each-frame) and
+   [the end](pipelines/download.md#8-the-end);
+   [Compare: reading lines](pipelines/compare.md#5-reading-lines)
+
+3. **`crates/ripandload-core/src/run.rs`.** `mod free_space;`, its
+   `pub(crate) use`, and `Outcome::FreeSpace(u64)` with its doc comment.
+   The compiler now stops at `app.rs`'s `match` on the Outcome (step 5).
+   → [architecture: the life of a Run](architecture.md#the-life-of-a-run)
+
+4. **`crates/ripandload-core/src/start.rs`.** `Request::FreeSpace`, and its
+   arm in `kind_and_commands`, which checks the Server with
+   `server(settings)?` first, as the other Server Runs do. Test that it
+   can't start without a Server, as `upload_without_a_server_cant_start`
+   does.
+   → [Compare: starting the Run](pipelines/compare.md#2-starting-the-run)
+
+5. **`crates/ripandload/src/app.rs`.** A `free_space: Option<u64>` field on
+   `RipAndLoadApp`, `None` in `new`. The `run_finished` arm stores the
+   Outcome's bytes there. The Upload tab's `Action::FreeSpace` arm calls
+   `start_run(Request::FreeSpace)`, and `upload_tab::show` gets the field.
+   → [Upload: the Upload tab catches up](pipelines/upload.md#7-the-upload-tab-catches-up)
+
+6. **`crates/ripandload/src/upload_tab.rs` and `wording.rs`.**
+   `Action::FreeSpace`; a Free space button enabled like Compare with
+   Server's, with the Server's error as its hover text when disabled; and a
+   "Free on the Server" row, showing `not asked yet` until a Free space has
+   run. A `size` function in `wording.rs` words the bytes as `511.6 GB`,
+   with a test. Update `show`'s doc, which lists its Actions.
+   → [Compare: the click](pipelines/compare.md#1-the-click) and
+   [the Upload tab catches up](pipelines/compare.md#7-the-upload-tab-catches-up)
+
+7. **Tests and docs.** In `crates/ripandload-core/tests/ssh_target.rs`, a
+   test against the Docker Server: start `Request::FreeSpace` and expect
+   `Outcome::FreeSpace` with more than 0 bytes. The test finds the SSH key
+   under its own checkout's `target/ssh-target/`, so run it from the
+   checkout that ran `dev/ssh-target.sh start`.
+
+   Then the docs that list every kind of Run, or every Server Run, which
+   the compiler can't flag:
+   - `GLOSSARY.md`: the Run entry, and a new **Free space** entry, as the
+     other Runs have;
+   - `run.rs`: the module doc's first line, its `# Kinds` list and its
+     "three Server runs", `Outcome::Nothing`'s doc, and `Run`'s doc;
+   - `start.rs`: `start`'s doc, twice (the Server Runs, and the
+     `CantStart`s), and `kind_and_commands`' `# Returns`;
+   - `run/server.rs`: the module doc, which names the Server Runs;
+   - `app.rs` and `upload_tab.rs`: their module docs, which list the Runs
+     they start;
+   - `crates/ripandload-core/tests/ssh_target.rs`: its module doc.
+
+   → [architecture: testing](architecture.md#testing)
+
+The rehearsal's diff touched exactly these files: `command.rs`, the new
+`run/free_space.rs`, `run.rs`, `run/server.rs`, `start.rs`, the
+integration test `ssh_target.rs`, `app.rs`, `upload_tab.rs`, `wording.rs` and
+`GLOSSARY.md`. `dev/check.sh` passed, and so did every Server test against
+the Docker Server, the new one included.
 
 ## Before you commit
 
