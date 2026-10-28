@@ -70,6 +70,10 @@ _Avoid_: Sync status, diff
 Everything the user configures in the app: Credentials, Quality, Naming templates, Staging folder, Servers. Kept in the Settings file.
 _Avoid_: Config, preferences
 
+**Settings file**:
+The file on disk the Settings are saved in and loaded from at start.
+_Avoid_: Config file, settings.toml
+
 **Streamrip config**:
 The app-owned streamrip configuration file generated from Settings; distinct from the user's personal streamrip config.
 _Avoid_: rip config, config.toml

@@ -1,6 +1,6 @@
 # 21 – Test connection checks that the Server has rsync
 
-Status: ready-for-human
+Status: resolved
 Blocked by: 20
 
 Part of `../spec.md`. Found while outlining the Check tools and Test connection pipeline (`../../internals-docs/issues/08-check-tools-test-connection-outline.md`). Blocked by 20 (`command.rs`).
@@ -19,3 +19,5 @@ Test connection logs in (`true`) and checks the music folder (`test -d … && te
 - [x] `dev/check.sh` passes; one commit.
 
 ## Comments
+
+2026-10-28: verified by the user.

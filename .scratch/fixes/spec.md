@@ -27,6 +27,8 @@ Bugs first, then smells. Tickets that touch the same file run in sequence (`Bloc
 | 17 Settings tab Action and one path picker | `settings_tab.rs`, new `path_picker.rs`, `app.rs` | 16 |
 | 18 Previews read the Qobuz `app_id` once per round | `download_tab.rs`, `app.rs` | 17 |
 | 19 Quality labels per level, one SSH key path, private `set_managed` | `source.rs`, `settings_tab.rs`, `download_tab.rs`, `tool_env.rs`, `streamrip_config.rs` | 18 |
+| 20 The Upload passes `--8-bit-output` too | `command.rs` | 19 |
+| 21 Test connection checks that the Server has rsync | `command.rs`, `run/test_connection.rs` | 20 |
 
 ## Standing rules
 

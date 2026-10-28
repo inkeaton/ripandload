@@ -1,6 +1,6 @@
 # 20 – The Upload passes `--8-bit-output` too
 
-Status: ready-for-human
+Status: resolved
 Blocked by: 19
 
 Part of `../spec.md`. Found while outlining the Upload pipeline (`../../internals-docs/issues/06-upload-pipeline-outline.md`).
@@ -15,3 +15,5 @@ Part of `../spec.md`. Found while outlining the Upload pipeline (`../../internal
 - [x] `dev/check.sh` passes; one commit.
 
 ## Comments
+
+2026-10-28: verified by the user.
