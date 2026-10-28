@@ -340,38 +340,46 @@ pub fn itemized_file(line: &str) -> Option<&str> {
 
 // == Test connection ==========================================================
 
-/// Returns Test connection's commands, both run on `server` over ssh.
+/// Returns Test connection's commands, all run on `server` over ssh.
 ///
 /// Each remote command is a single argument after `--`, quoted for the
 /// Server's shell.
 ///
 /// # Returns
 ///
-/// Two specs, in the order they run:
+/// Three specs, in the order they run:
 ///
 /// 1. One that logs in and runs `true`.
 /// 2. One that checks that the music folder exists and is writable.
+/// 3. [`rsync_check_spec`].
 pub fn test_connection_specs(server: &Server) -> Vec<CommandSpec> {
     let folder = match server.music_folder.strip_prefix("~/") {
         // Left unquoted so the Server's shell expands it, as rsync does.
         Some(rest) => format!("~/{}", shell_quote(rest)),
         None => shell_quote(&server.music_folder),
     };
-    [
-        "true".to_owned(),
-        format!("test -d {folder} && test -w {folder}"),
+    vec![
+        remote_spec(server, "true".to_owned()),
+        remote_spec(server, format!("test -d {folder} && test -w {folder}")),
+        rsync_check_spec(server),
     ]
-    .into_iter()
-    .map(|remote| {
-        let mut args = ssh_options(server);
-        args.extend(["--".to_owned(), server.destination(), remote]);
-        CommandSpec {
-            program: Tool::Ssh,
-            args,
-            env: Vec::new(),
-        }
-    })
-    .collect()
+}
+
+/// Returns Test connection's last check, that rsync is installed on
+/// `server`, as Uploads and Compare with Server need.
+pub fn rsync_check_spec(server: &Server) -> CommandSpec {
+    remote_spec(server, "command -v rsync".to_owned())
+}
+
+/// Returns ssh running `remote`, one shell command line, on `server`.
+fn remote_spec(server: &Server, remote: String) -> CommandSpec {
+    let mut args = ssh_options(server);
+    args.extend(["--".to_owned(), server.destination(), remote]);
+    CommandSpec {
+        program: Tool::Ssh,
+        args,
+        env: Vec::new(),
+    }
 }
 
 /// Returns `text` quoted for the Server's shell, which runs ssh's commands.
@@ -678,9 +686,9 @@ total size is 6  speedup is 0.02 (DRY RUN)";
 
     // == Test connection ======================================================
 
-    /// Test connection logs in, then checks the music folder.
+    /// Test connection logs in, then checks the music folder, then rsync.
     #[test]
-    fn test_connection_logs_in_then_checks_the_music_folder() {
+    fn test_connection_logs_in_then_checks_the_music_folder_then_rsync() {
         let mut server = server();
         server.music_folder = "/srv/my music".into();
         let lines: Vec<String> = test_connection_specs(&server)
@@ -694,6 +702,7 @@ total size is 6  speedup is 0.02 (DRY RUN)";
             [
                 format!("{ssh} true"),
                 format!("{ssh} test -d '/srv/my music' && test -w '/srv/my music'"),
+                format!("{ssh} command -v rsync"),
             ]
         );
     }

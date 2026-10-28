@@ -78,7 +78,7 @@ pub fn show(ui: &mut egui::Ui, settings: &mut Settings, run_going: bool, unsaved
                 !run_going && server_ready.is_ok(),
                 egui::Button::new("Test connection"),
             )
-            .on_hover_text("Logs in to the Server and checks that the music folder is writable");
+            .on_hover_text("Logs in to the Server and checks that the music folder is writable and rsync is installed");
         if let Err(cant) = &server_ready {
             test = test.on_disabled_hover_text(error_chain(cant));
         }
