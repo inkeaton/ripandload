@@ -234,6 +234,9 @@ pub fn upload_spec(staging: &Path, server: &Server) -> CommandSpec {
 /// folder. A slash that is already there isn't doubled. There's no
 /// `--delete`: an Upload never removes anything on the Server.
 ///
+/// `--8-bit-output` keeps names like "Björk" readable in rsync's output when
+/// it runs in the C locale, as in WSL.
+///
 /// # Arguments
 ///
 /// - `server`: the Server to Upload to. Its login and SSH key go into the
@@ -243,7 +246,7 @@ pub fn upload_spec(staging: &Path, server: &Server) -> CommandSpec {
 /// # Format
 ///
 /// ```text
-/// -rtv --partial --chmod=D755,F644 -e "<ssh …>"
+/// -rtv --partial --chmod=D755,F644 --8-bit-output -e "<ssh …>"
 ///     <staging>/ <user>@<host>:<music folder>/
 /// ```
 pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
@@ -254,6 +257,7 @@ pub fn rsync_args(server: &Server, staging: &Path) -> Vec<String> {
         "-rtv".to_string(),
         "--partial".to_string(),
         "--chmod=D755,F644".to_string(),
+        "--8-bit-output".to_string(),
         "-e".to_string(),
         remote_shell(server),
         path,
@@ -291,8 +295,7 @@ fn check_trailing_slash(value: &str) -> String {
 /// Returns Compare with Server's command: the Upload's rsync as a dry run.
 ///
 /// It sends nothing, and lists each file an Upload would send, one line
-/// each, for [`itemized_file`] to read. `--8-bit-output` keeps names like
-/// "Björk" readable when rsync runs in the C locale, as in WSL.
+/// each, for [`itemized_file`] to read.
 ///
 /// # Arguments
 ///
@@ -300,9 +303,7 @@ fn check_trailing_slash(value: &str) -> String {
 /// - `server`: the Server to compare with.
 pub fn compare_spec(staging: &Path, server: &Server) -> CommandSpec {
     // Options go first, so the Upload's own arguments stay as they are.
-    let mut args: Vec<String> = ["--dry-run", "--itemize-changes", "--8-bit-output"]
-        .map(String::from)
-        .into();
+    let mut args: Vec<String> = ["--dry-run", "--itemize-changes"].map(String::from).into();
     args.extend(rsync_args(server, staging));
     CommandSpec {
         program: Tool::Rsync,
@@ -549,6 +550,7 @@ mod tests {
                 "-rtv",
                 "--partial",
                 "--chmod=D755,F644",
+                "--8-bit-output",
                 "-e",
                 "ssh -i /home/mari/.ssh/navidrome_rsync_key -p 21 -o StrictHostKeyChecking=accept-new -o BatchMode=yes",
                 "/home/mari/Music/ripandload/",
@@ -565,11 +567,8 @@ mod tests {
         let compare = compare_spec(staging, &server());
 
         assert_eq!(compare.program, Tool::Rsync);
-        assert_eq!(
-            compare.args[..3],
-            ["--dry-run", "--itemize-changes", "--8-bit-output"]
-        );
-        assert_eq!(compare.args[3..], upload.args);
+        assert_eq!(compare.args[..2], ["--dry-run", "--itemize-changes"]);
+        assert_eq!(compare.args[2..], upload.args);
     }
 
     /// Itemized lines give exactly the files an Upload would send.
@@ -631,9 +630,9 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         server.ssh_key = Some(PathBuf::from("/home/a b/it's key"));
         let args = rsync_args(&server, Path::new("/staging"));
         assert!(
-            args[4].starts_with("ssh -i '/home/a b/it''s key' -p 21 "),
+            args[5].starts_with("ssh -i '/home/a b/it''s key' -p 21 "),
             "{}",
-            args[4]
+            args[5]
         );
     }
 
@@ -645,10 +644,10 @@ total size is 6  speedup is 0.02 (DRY RUN)";
         server.user = String::new();
         let args = rsync_args(&server, Path::new("/staging"));
         assert_eq!(
-            args[4],
+            args[5],
             "ssh -p 21 -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
         );
-        assert_eq!(args[6], "music.example.org:/srv/subsonic/Music/");
+        assert_eq!(args[7], "music.example.org:/srv/subsonic/Music/");
     }
 
     /// An Upload runs rsync from the Staging folder, with no extra env.
@@ -664,6 +663,17 @@ total size is 6  speedup is 0.02 (DRY RUN)";
             ]
         );
         assert!(spec.env.is_empty());
+    }
+
+    /// An Upload passes `--8-bit-output`, so "Björk" stays readable in the Log.
+    #[test]
+    fn upload_spec_keeps_non_ascii_names_readable() {
+        let spec = upload_spec(Path::new("/staging"), &server());
+        assert!(
+            spec.args.iter().any(|arg| arg == "--8-bit-output"),
+            "{:?}",
+            spec.args
+        );
     }
 
     // == Test connection ======================================================
