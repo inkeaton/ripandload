@@ -26,10 +26,11 @@ Each of the seven deepening candidates from the architecture review of 2026-10-2
 - **05 Settings tab**: returns `Action { Save, CheckTools, TestConnection }`; unsaved-changes stays in the app; one `PathPicker` struct; `ssh_key` becomes `Option<PathBuf>` and an empty Staging folder a `SettingsProblem`. Fixes 16 (core) then 17 (GUI). See `issues/05-settings-tab-actions.md`.
 - **06 Previews**: `QobuzAccess` cached per round (cleared by `retry`), path from `Places`, no Source passed (`fetch` finds it); `state_of` a pure GUI mapping; named `Finished`. Fix 18. See `issues/06-preview-lookup-inputs.md`.
 - **07 Facts written twice**: Quality labels per level and `quality_choices` an intersection (yes); no `MANAGED_KEYS` table, `set_managed` private (no); the SSH key path from one `concat!` literal (yes). Fix 19. See `issues/07-single-source-facts.md`.
+- **09 App split**: no; `app.rs` (542 lines) is no longer the GUI crate's largest file, `ui()` changes state only through the `Action`/`Outcome` matches, and the two dialogs stay. Revisit if `app.rs` becomes the largest file or a third dialog or fourth tab arrives. No ADR. See `issues/09-app-split.md`.
 
 ## Not yet specified
 
-- Whether `app.rs` still needs a split: deferred to `issues/09-app-split.md`, blocked by fix 18; re-measure then.
+Nothing: every candidate has a design or a recorded no.
 
 ## Out of scope
 

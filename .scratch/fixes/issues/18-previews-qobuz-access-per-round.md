@@ -1,6 +1,6 @@
 # 18 – Previews read the Qobuz `app_id` once per round
 
-Status: ready-for-human
+Status: resolved
 Blocked by: 17
 
 Part of `../spec.md`. Designed in `../../architecture/issues/06-preview-lookup-inputs.md` (see its Answer). Blocked by 17 because both touch `app.rs`; `Places` comes from fix 13.
@@ -16,7 +16,7 @@ Part of `../spec.md`. Designed in `../../architecture/issues/06-preview-lookup-i
 ## Acceptance
 
 - [x] Unit tests in `download_tab.rs`: `state_of`'s mapping; with an injected `read_app_id` counting its calls, one read per round however many Qobuz URLs, and a new read after `retry()`. `answers_from_the_old_round_are_dropped` still passes.
-- [ ] `dev/check.sh` passes (done); by hand: Qobuz and Deezer Previews appear; after a first Download, a Qobuz URL that said "no app_id" gets its Preview.
+- [x] `dev/check.sh` passes (done); by hand: Qobuz and Deezer Previews appear; after a first Download, a Qobuz URL that said "no app_id" gets its Preview.
 - [x] One commit.
 
 ## Comments
@@ -27,3 +27,5 @@ Part of `../spec.md`. Designed in `../../architecture/issues/06-preview-lookup-i
 - Every failed lookup is still logged at debug, `NoQobuzAppId` and `NoQobuzToken` included, as before. The lookup thread does the logging, with the URL, so `state_of` stays pure.
 - The tests start real lookup threads, but a Qobuz URL with no `app_id` fails in `preview::fetch` before any request, so they stay offline.
 - Still to do by hand: Qobuz and Deezer Previews appear; after a first Download, a Qobuz URL that said "no preview until the first Qobuz Download" gets its Preview.
+
+2026-10-28: hand check done by the user; Previews work as expected.
